@@ -1,0 +1,71 @@
+GIT
+  remote: git://github.com/ProjectDaisy/em-console.git
+  revision: 6e21fcebe74fbc1aed6b02d976753be161c18413
+  specs:
+    em-console (0.0.1)
+      em-synchrony
+
+PATH
+  remote: .
+  specs:
+    herdis (0.0.1)
+      em-http-request
+      em-synchrony
+      goliath
+      hiredis
+      redis
+      yajl-ruby
+
+GEM
+  remote: http://rubygems.org/
+  specs:
+    addressable (2.2.7)
+    async-rack (0.5.1)
+      rack (~> 1.1)
+    cookiejar (0.3.0)
+    em-http-request (1.0.1)
+      addressable (>= 2.2.3)
+      cookiejar
+      em-socksify
+      eventmachine (>= 1.0.0.beta.4)
+      http_parser.rb (>= 0.5.3)
+    em-socksify (0.1.0)
+      eventmachine
+    em-synchrony (1.0.0)
+      eventmachine (>= 1.0.0.beta.1)
+    eventmachine (1.0.0.beta.4)
+    goliath (0.9.4)
+      async-rack
+      em-synchrony (>= 1.0.0)
+      eventmachine (>= 1.0.0.beta.3)
+      http_parser.rb
+      http_router (~> 0.9.0)
+      log4r
+      multi_json
+      rack (>= 1.2.2)
+      rack-contrib
+      rack-respond_to
+    hiredis (0.4.4)
+    http_parser.rb (0.5.3)
+    http_router (0.9.7)
+      rack (>= 1.0.0)
+      url_mount (~> 0.2.1)
+    log4r (1.1.10)
+    multi_json (1.1.0)
+    rack (1.4.1)
+    rack-accept-media-types (0.9)
+    rack-contrib (1.1.0)
+      rack (>= 0.9.1)
+    rack-respond_to (0.9.8)
+      rack-accept-media-types (>= 0.6)
+    redis (2.2.2)
+    url_mount (0.2.1)
+      rack
+    yajl-ruby (1.1.0)
+
+PLATFORMS
+  ruby
+
+DEPENDENCIES
+  em-console!
+  herdis!
