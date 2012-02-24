@@ -69,10 +69,13 @@ module Herdis
       @@instance = self
     end
 
-    def ping
-      sheep.size.to_f / sheep.count do |sheep|
-        sheep.connection.ping == "PONG"
-      end
+    def status
+      {
+        :shards => sheep.size,
+        :live => sheep.count do |sheep|
+          sheep.connection.ping == "PONG"
+        end
+      }
     end
     
     def shutdown

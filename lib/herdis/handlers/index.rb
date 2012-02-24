@@ -7,7 +7,8 @@ module Herdis
       include Common
 
       def response(env)
-        [200, {}, {:ping => Herdis::Shepherd.instance.ping}]
+        instance = Herdis::Shepherd.instance
+        [200, {}, instance.status]
       end
       
     end
