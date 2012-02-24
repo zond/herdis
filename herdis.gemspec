@@ -12,6 +12,7 @@ EOF
   s.require_path  = "lib"
 
   s.files     =   Dir.glob('lib/**/*.rb')
+  s.executables = ['herdis']
 
   s.has_rdoc  =   true
   s.rdoc_options << '--line-numbers'
