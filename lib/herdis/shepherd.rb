@@ -3,28 +3,24 @@ module Herdis
 
   class Shepherd
 
-    @@instance = nil
-
-    def self.instance
-      @@instance ||= Shepherd.new
-    end
-
     SHARDS = 128
     INITIAL_PORT = 9080
 
-    class Sheep
+    class Shard
       attr_accessor :port
       attr_accessor :dir
       attr_accessor :redis
-      def initialize(redis, dir, port)
-        @port = port
-        @dir = dir
-        @redis = redis
-        Dir.mkdir(@dir) unless Dir.exists?(dir)
+      attr_accessor :host
+      def initialize(options = {})
+        @port = options.delete(:port)
+        @dir = options.delete(:dir)
+        @redis = options.delete(:redis)
+        @host = options.delete(:host) || "127.0.0.1"
+        Dir.mkdir(dir) unless Dir.exists?(dir)
         initialize_redis
       end
       def connection
-        @connection ||= Redis.new(:host => "127.0.0.1", :port => port)
+        @connection ||= Redis.new(:host => host, :port => port)
       end
       def inspect
         begin
@@ -59,37 +55,58 @@ module Herdis
 
     attr_reader :dir
     attr_reader :redis
-    attr_reader :sheep
+    attr_reader :shards
+    attr_reader :cluster
+    attr_reader :node_id
 
     def initialize(options = {})
       @dir = options.delete(:dir) || File.join(ENV["HOME"], ".herdis")
       Dir.mkdir(dir) unless Dir.exists?(dir)
       @redis = options.delete(:redis) || "redis-server"
-      initialize_sheep
-      @@instance = self
+      @cluster = {}
+      @node_id = options.delete(:node_id) || rand(1 << 256).to_s(36)
+      initialize_shards
     end
 
-    def status
+    def join(contact_url)
+      raise "Unable to join unless having @host" unless host
+      raise "Unable to join unless having @port" unless port
+      contact_info = Yajl::Parser.parse(EM::HttpRequest.new(contact_url).get)
+      @cluster = contact_info[:cluster]
+    end
+
+    def node_status
       {
-        :shards => sheep.size,
-        :live => sheep.count do |sheep|
-          sheep.connection.ping == "PONG"
+        :url => Fiber.current.public_url,
+        :id => node_id,
+        :shards => shards.size,
+        :live => shards.count do |shard|
+          shard.connection.ping == "PONG"
         end
+      }
+    end
+
+    def cluster_status
+      {
+        :node => node_status,
+        :cluster => cluster.merge(node_id => node_status)
       }
     end
     
     def shutdown
-      sheep.each do |sheep|
-        sheep.connection.shutdown
+      shards.each do |shard|
+        shard.connection.shutdown
       end
     end
 
     private
 
-    def initialize_sheep
-      @sheep = []
+    def initialize_shards
+      @shards = []
       SHARDS.times do |shard_id|
-        @sheep << Sheep.new(redis, File.join(dir, "shard#{shard_id}"), INITIAL_PORT + shard_id)
+        @shards << Shard.new(:redis => redis, 
+                             :dir => File.join(dir, "shard#{shard_id}"), 
+                             :port => INITIAL_PORT + shard_id)
       end
     end
 

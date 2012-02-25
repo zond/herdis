@@ -5,6 +5,7 @@ require 'em-http-request'
 require 'redis'
 require 'goliath'
 require 'yajl'
+require 'pp'
 
 $LOAD_PATH.unshift(File.expand_path('lib'))
 

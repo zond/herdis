@@ -9,6 +9,7 @@ module Herdis
         base.use Goliath::Rack::DefaultMimeType
         base.use Goliath::Rack::Formatters::JSON
         base.use Herdis::Rack::DefaultHeaders
+        base.use Herdis::Rack::ShepherdNotifier
       end
       
     end

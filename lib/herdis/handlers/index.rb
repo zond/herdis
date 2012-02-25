@@ -7,8 +7,7 @@ module Herdis
       include Common
 
       def response(env)
-        instance = Herdis::Shepherd.instance
-        [200, {}, instance.status]
+        [200, {}, Server.shepherd.cluster_status]
       end
       
     end
