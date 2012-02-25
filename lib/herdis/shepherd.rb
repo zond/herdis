@@ -21,6 +21,9 @@ module Herdis
       def connection
         @connection ||= Redis.new(:host => host, :port => port)
       end
+      def to_json
+        Yajl::Encoder.encode("#{Fiber.current.host}:#{port}")
+      end
       def inspect
         begin
           super
@@ -55,7 +58,8 @@ module Herdis
     attr_reader :dir
     attr_reader :redis
     attr_reader :shards
-    attr_reader :cluster
+    attr_reader :shepherds
+    attr_reader :external_shards
     attr_reader :node_id
     attr_reader :first_port
 
@@ -64,62 +68,85 @@ module Herdis
       Dir.mkdir(dir) unless Dir.exists?(dir)
       @redis = options.delete(:redis) || "redis-server"
       @first_port = options.delete(:first_port) || 9080
-      @cluster = {}
+      @shepherds = {}
+      @external_shards = {}
       @node_id = options.delete(:node_id) || rand(1 << 256).to_s(36)
       initialize_shards
     end
 
-    def join(url)
-      EM::HttpRequest.new(URI.join(url, node_id)).put(:body => Yajl::Encoder.encode(node_status),
-                                                      :head => {"Content-Type" => "application/json"})
+    def join_cluster(url)
+      shutdown
+      join_request = EM::HttpRequest.new(url).put(:body => Yajl::Encoder.encode(node_status),
+                                                  :head => {"Content-Type" => "application/json"})
+      data = Yajl::Parser.parse(join_request.response)
+      @shepherds = data["shepherds"]
+      @external_shards = data["shards"]
     end
 
-    def add_node(info)
-      merge_cluster(info["id"] => info)
+    def accept_node(node_status)
+      new_shepherds = shepherds.rmerge(node_status["id"] => node_status)
+      new_shepherds.delete(node_id)
+      if new_shepherds != shepherds
+        @shepherds = new_shepherds
+        broadcast_cluster
+      end
+    end
+
+    def merge_cluster(cluster_status)
+      new_shepherds = shepherds.rmerge(cluster_status["shepherds"])
+      new_shepherds.delete(node_id)
+      new_shards = external_shards.rmerge(cluster_status["shards"])
+      if new_shepherds != shepherds || new_shards != external_shards
+        @shepherds = new_shepherds
+        @external_shards = new_shards
+        broadcast_cluster
+      end
+    end
+
+    def url
+      "http://#{Fiber.current.host}:#{Fiber.current.port}"
     end
 
     def node_status
       {
-        :url => Fiber.current.public_url,
-        :id => node_id,
-        :shards => shards.size,
-        :live => shards.count do |shard|
-          shard.connection.ping == "PONG"
-        end
+        "type" => "Node",
+        "url" => url,
+        "id" => node_id
       }
     end
 
     def cluster_status
       {
-        :cluster => cluster.merge(node_id => node_status)
+        "type" => "Cluster",
+        "shepherds" => shepherds.merge(node_id => node_status),
+        "shards" => external_shards.merge(shards)
       }
     end
     
     def shutdown
-      shards.each do |shard|
+      shards.each do |shard_id, shard|
         shard.connection.shutdown
       end
+      @shards = {}
     end
 
     private
 
-    def merge_cluster(info)
-      new_cluster = @cluster.merge(info)
-      new_cluster.delete(node_id)
-      if @cluster != new_cluster
-        @cluster = new_cluster
-        @cluster.each do |id, node|
-          join(node["url"])
-        end
+    def broadcast_cluster
+      multi = EM::Synchrony::Multi.new
+      shepherds.each do |node_id, node|
+        multi.add(node_id, EM::HttpRequest.new(node_status["url"]).aput(:body => Yajl::Encoder.encode(cluster_status),
+                                                                        :head => {"Content-Type" => "application/json"}))
       end
+      multi.perform
     end
 
     def initialize_shards
-      @shards = []
+      @shards = {}
       SHARDS.times do |shard_id|
-        shards << Shard.new(:redis => redis, 
-                            :dir => File.join(dir, "shard#{shard_id}"), 
-                            :port => first_port + shard_id)
+        shards[shard_id] = Shard.new(:redis => redis, 
+                                     :dir => File.join(dir, "shard#{shard_id}"), 
+                                     :port => first_port + shard_id)
       end
     end
 

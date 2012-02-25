@@ -1,7 +1,7 @@
 
-require 'hiredis'
 require 'em-synchrony'
-require 'em-http-request'
+require 'em-synchrony/em-http'
+require 'hiredis'
 require 'redis'
 require 'goliath'
 require 'yajl'
@@ -9,6 +9,7 @@ require 'pp'
 
 $LOAD_PATH.unshift(File.expand_path('lib'))
 
+require 'rmerge'
 require 'herdis/shepherd'
 require 'herdis/server'
 

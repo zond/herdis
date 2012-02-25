@@ -1,14 +1,17 @@
 
 require 'herdis/rack/default_headers'
 require 'herdis/rack/shepherd_notifier'
+require 'herdis/rack/favicon'
 require 'herdis/handlers/common'
 require 'herdis/handlers/index'
-require 'herdis/handlers/join'
-require 'herdis/handlers/add_node'
+require 'herdis/handlers/join_cluster'
+require 'herdis/handlers/update_cluster'
 
 module Herdis
 
   class Server < Goliath::API
+
+    use Herdis::Rack::Favicon, File.join(File.dirname(__FILE__), "..", "..", "assets", "shepherd.png")
 
     @@shepherd = nil
 
@@ -25,8 +28,8 @@ module Herdis
     end
     
     get '/', Herdis::Handlers::Index
-    post '/', Herdis::Handlers::Join
-    put '/*', Herdis::Handlers::AddNode
+    post '/', Herdis::Handlers::JoinCluster
+    put '/', Herdis::Handlers::UpdateCluster
     
 
   end

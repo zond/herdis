@@ -3,11 +3,11 @@ module Herdis
 
    module Handlers
 
-    class AddNode < Goliath::API
+    class JoinCluster < Goliath::API
       include Common
 
       def response(env)
-        Server.shepherd.add_node(env['params'])
+        Server.shepherd.join_cluster(env['params']['url'])
         [200, {}, Server.shepherd.cluster_status]
       end
       

@@ -5,9 +5,11 @@ module Herdis
       
       def call(env)
         class << Fiber.current
-          attr_accessor :public_url
+          attr_accessor :host
+          attr_accessor :port
         end
-        Fiber.current.public_url = URI.parse("http://#{env["SERVER_NAME"]}:#{env["SERVER_PORT"]}")
+        Fiber.current.host = env["SERVER_NAME"]
+        Fiber.current.port = env["SERVER_PORT"]
         super(env)
       end
 
