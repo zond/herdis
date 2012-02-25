@@ -3,6 +3,8 @@ require 'herdis/rack/default_headers'
 require 'herdis/rack/shepherd_notifier'
 require 'herdis/handlers/common'
 require 'herdis/handlers/index'
+require 'herdis/handlers/join'
+require 'herdis/handlers/add_node'
 
 module Herdis
 
@@ -15,10 +17,17 @@ module Herdis
     end
 
     def initialize
-      @@shepherd = Herdis::Shepherd.new
+      opts = {}
+      opts[:first_port] = ENV["SHEPHERD_FIRST_PORT"].to_i if ENV["SHEPHERD_FIRST_PORT"]
+      opts[:dir] = ENV["SHEPHERD_DIR"] if ENV["SHEPHERD_DIR"]
+      opts[:node_id] = ENV["SHEPHERD_NODE_ID"] if ENV["SHEPHERD_NODE_ID"]
+      @@shepherd = Herdis::Shepherd.new(opts)
     end
     
     get '/', Herdis::Handlers::Index
+    post '/', Herdis::Handlers::Join
+    put '/*', Herdis::Handlers::AddNode
+    
 
   end
 
