@@ -9,8 +9,8 @@ require 'pp'
 
 $LOAD_PATH.unshift(File.expand_path('lib'))
 
-require 'herdis/common'
 require 'herdis/rmerge'
+require 'herdis/common'
 require 'herdis/shepherd'
 require 'herdis/rack/default_headers'
 require 'herdis/rack/shepherd_notifier'

@@ -34,7 +34,6 @@ module Herdis
       cluster_request = EM::HttpRequest.new(url).get(:head => {"Accept" => "application/json"})
       @nodes = []
       Yajl::Parser.parse(cluster_request.response)["shards"].each do |key, value|
-        puts "connecting to #{value}"
         @nodes[key.to_i] = Redis.connect(options.merge(:url => value))
       end
       unless Herdis::Common::SHARDS == @nodes.size

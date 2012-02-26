@@ -8,8 +8,8 @@ module Herdis
 
       def response(env)
         data = env['params']
-        if data["type"] == "Node"
-          Server.shepherd.accept_node(data)
+        if data["type"] == "Shepherd"
+          Server.shepherd.accept_shepherd(data)
         elsif data["type"] == "Cluster"
           Server.shepherd.merge_cluster(data)
         else
