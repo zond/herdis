@@ -3,8 +3,6 @@ module Herdis
 
   class Shepherd
 
-    SHARDS = 128
-
     class Shard
       attr_accessor :port
       attr_accessor :dir
@@ -22,7 +20,7 @@ module Herdis
         @connection ||= Redis.new(:host => host, :port => port)
       end
       def to_json
-        Yajl::Encoder.encode("#{Fiber.current.host}:#{port}")
+        Yajl::Encoder.encode("redis://#{Fiber.current.host}:#{port}/")
       end
       def inspect
         begin
@@ -143,7 +141,7 @@ module Herdis
 
     def initialize_shards
       @shards = {}
-      SHARDS.times do |shard_id|
+      Herdis::Common::SHARDS.times do |shard_id|
         shards[shard_id] = Shard.new(:redis => redis, 
                                      :dir => File.join(dir, "shard#{shard_id}"), 
                                      :port => first_port + shard_id)

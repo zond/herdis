@@ -1,4 +1,17 @@
 
+require 'em-synchrony'
+require 'em-synchrony/em-http'
+require 'hiredis'
+require 'redis'
+require 'goliath'
+require 'yajl'
+require 'pp'
+
+$LOAD_PATH.unshift(File.expand_path('lib'))
+
+require 'herdis/common'
+require 'herdis/rmerge'
+require 'herdis/shepherd'
 require 'herdis/rack/default_headers'
 require 'herdis/rack/shepherd_notifier'
 require 'herdis/rack/favicon'
@@ -35,3 +48,6 @@ module Herdis
   end
 
 end
+
+Goliath::Application.app_class = Herdis::Server
+
