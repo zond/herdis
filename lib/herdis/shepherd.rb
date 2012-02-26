@@ -126,11 +126,19 @@ module Herdis
     end
 
     def ordinal
-      cs = cluster_status
-      cs["shepherds"]
+      (shepherds.keys + [shepherd_id]).sort.index(shepherd_id)
     end
 
-    private
+    def owned_shards
+      rval = []
+      index = ordinal
+      cluster_size = shepherds.size + 1
+      while index < Herdis::Common::SHARDS
+        rval << index
+        index += cluster_size
+      end
+      rval
+    end
 
     def broadcast_cluster
       multi = EM::Synchrony::Multi.new
