@@ -11,7 +11,7 @@ describe Herdis::Server do
         @first_port = 11000
         @http_port = 12000
         @shepherd_id = rand(1 << 256).to_s(36)
-        system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir} SHEPHERD_FIRST_PORT=#{@first_port} SHEPHERD_ID=#{@shepherd_id} #{File.expand_path('bin/herdis')} -p #{@http_port} -d -P #{@pidfile.path}")
+        system("env SHEPHERD_DIR=#{@dir} SHEPHERD_FIRST_PORT=#{@first_port} SHEPHERD_ID=#{@shepherd_id} #{File.expand_path('bin/herdis')} -p #{@http_port} -d -P #{@pidfile.path}")
         EM.stop
       end
     end
@@ -110,20 +110,30 @@ describe Herdis::Server do
     it 'gets included in the cluster state' do
       state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
       state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-      state1["shepherds"].should == state2["shepherds"]
       state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
+      state1["shepherds"].should == state2["shepherds"]
     end
 
     it 'gets the clusters existing shards' do
       state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
       state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-      state1["shards"].should == state2["shards"]
       128.times do |n|
         state1["shards"][n.to_s].should == "redis://localhost:#{@first_port1 + n}/"
       end
+      state1["shards"].should == state2["shards"]
     end
 
-    it 'starts slave shards for all shards in in the cluster it should own'
+    it 'starts slave shards for all shards in the cluster it should own' do
+      128.times do |n|
+        if n % 2 == 1
+          r = Redis.new(:host => "localhost", :port => @first_port2 + n)
+          info = r.info
+          info["role"].should == "slave"
+          info["master_host"].should == "localhost"
+          info["master_port"].to_i.should == @first_port1 + n
+        end
+      end
+    end
 
     it 'broadcasts its slave shards as for shards it should own when they are synced'
 

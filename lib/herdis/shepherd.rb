@@ -16,7 +16,7 @@ module Herdis
         @host = options.delete(:host) || "127.0.0.1"
         @inmemory = options.delete(:inmemory)
         Dir.mkdir(dir) unless Dir.exists?(dir)
-        initialize_redis
+        initialize_redis(options.delete(:slaveof))
       end
       def connection
         @connection ||= Redis.new(:host => host, :port => port)
@@ -32,19 +32,22 @@ module Herdis
         end
       end
       private
-      def initialize_redis
+      def initialize_redis(slaveof = nil)
         begin
           connection.ping
         rescue Errno::ECONNREFUSED => e
           io = IO.popen("#{redis} -", "w")
-          write_configuration(io)
+          write_configuration(io, slaveof)
         end
       end
-      def write_configuration(io)
+      def write_configuration(io, slaveof = nil)
         io.puts("daemonize yes")
         io.puts("pidfile #{dir}/pid")
         io.puts("port #{port}")
         io.puts("timeout 300")
+        if slaveof
+          io.puts("slaveof #{slaveof.host} #{slaveof.port}")
+        end
         unless inmemory
           io.puts("save 900 1")
           io.puts("save 300 10")
@@ -79,7 +82,7 @@ module Herdis
       @slave_shards = {}
       @shards = {}
       Herdis::Common::SHARDS.times do |shard_id|
-        shards[shard_id] = create_shard(shard_id)
+        create_master_shard(shard_id)
       end
     end
 
@@ -150,14 +153,14 @@ module Herdis
 
     def update_cluster(new_shepherds, new_external_shards)
       updated = false
+      if !new_external_shards.nil? && new_external_shards != external_shards
+        updated = true
+        @external_shards = new_external_shards
+      end
       if !new_shepherds.nil? && new_shepherds != shepherds
         updated = true
         @shepherds = new_shepherds
         update_shards
-      end
-      if !new_external_shards.nil? && new_external_shards != external_shards
-        updated = true
-        @external_shards = new_external_shards
       end
       broadcast_cluster if updated
     end
@@ -166,7 +169,7 @@ module Herdis
       properly_owned = owned_shards
       running = Set.new(shards.keys)
       (properly_owned - running).each do |shard_id|
-        slave_shards[shard_id] = create_shard(shard_id)
+        create_slave_shard(shard_id)
       end
     end
 
@@ -180,11 +183,20 @@ module Herdis
       multi.perform while !multi.finished?
     end
 
-    def create_shard(shard_id)
-      Shard.new(:redis => redis, 
-                :dir => File.join(dir, "shard#{shard_id}"), 
-                :inmemory => inmemory,
-                :port => first_port + shard_id)
+    def create_master_shard(shard_id)
+      shards[shard_id] = create_shard(shard_id)
+    end
+
+    def create_slave_shard(shard_id)
+      u = URI.parse(external_shards[shard_id.to_s])
+      slave_shards[shard_id] = create_shard(shard_id, :slaveof => u)
+    end
+
+    def create_shard(shard_id, options = {})
+      Shard.new(options.merge(:redis => redis, 
+                              :dir => File.join(dir, "shard#{shard_id}"), 
+                              :inmemory => inmemory,
+                              :port => first_port + shard_id))
     end
 
   end
