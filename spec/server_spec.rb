@@ -114,7 +114,14 @@ describe Herdis::Server do
       state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
     end
 
-    it 'gets the clusters existing shards'
+    it 'gets the clusters existing shards' do
+      state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
+      state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+      state1["shards"].should == state2["shards"]
+      128.times do |n|
+        state1["shards"][n.to_s].should == "redis://localhost:#{@first_port1 + n}/"
+      end
+    end
 
     it 'starts slave shards for all shards in in the cluster it should own'
 
