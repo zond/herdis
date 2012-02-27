@@ -9,14 +9,16 @@ module Herdis
       attr_accessor :redis
       attr_accessor :host
       attr_accessor :inmemory
+      attr_accessor :slaveof
       def initialize(options = {})
         @port = options.delete(:port)
         @dir = options.delete(:dir)
         @redis = options.delete(:redis)
         @host = options.delete(:host) || "127.0.0.1"
         @inmemory = options.delete(:inmemory)
+        @slaveof = options.delete(:slaveof)
         Dir.mkdir(dir) unless Dir.exists?(dir)
-        initialize_redis(options.delete(:slaveof))
+        initialize_redis
       end
       def connection
         @connection ||= Redis.new(:host => host, :port => port)
@@ -31,16 +33,20 @@ module Herdis
           "#<#{self.class.name} @dir=#{dir} @port=#{port} CLOSED>"
         end
       end
+      def liberate!
+        @slaveof = nil
+        connection.slaveof("NO", "ONE")
+      end
       private
-      def initialize_redis(slaveof = nil)
+      def initialize_redis
         begin
           connection.ping
         rescue Errno::ECONNREFUSED => e
           io = IO.popen("#{redis} -", "w")
-          write_configuration(io, slaveof)
+          write_configuration(io)
         end
       end
-      def write_configuration(io, slaveof = nil)
+      def write_configuration(io)
         io.puts("daemonize yes")
         io.puts("pidfile #{dir}/pid")
         io.puts("port #{port}")
@@ -69,6 +75,7 @@ module Herdis
     attr_reader :shepherd_id
     attr_reader :first_port
     attr_reader :inmemory
+    attr_reader :check_slave_timer
 
     def initialize(options = {})
       @dir = options.delete(:dir) || File.join(ENV["HOME"], ".herdis")
@@ -187,9 +194,19 @@ module Herdis
       shards[shard_id] = create_shard(shard_id)
     end
 
+    def check_slave_shards
+      ready_for_liberation = {}
+      slave_shards.each do |shard_id, shard|
+        ready_for_liberation[shard_id] = shard if shard.connection.info["master_sync_in_progress"] == "0"
+      end
+    end
+
     def create_slave_shard(shard_id)
       u = URI.parse(external_shards[shard_id.to_s])
       slave_shards[shard_id] = create_shard(shard_id, :slaveof => u)
+      @check_slave_timer ||= EM.add_periodic_timer(10) do
+        check_slave_shards
+      end
     end
 
     def create_shard(shard_id, options = {})

@@ -61,7 +61,7 @@ describe Herdis::Server do
     
   end
 
-  context 'joining an existing shepherd' do
+  context 'joining an existing shepherd with takeover prevented' do
 
     before :all do
       EM.synchrony do
@@ -70,13 +70,13 @@ describe Herdis::Server do
         @first_port1 = 13000
         @http_port1 = 14000
         @shepherd_id1 = "id1"
-        system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
+        system("env SHEPHERD_TAKEOVER=false SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
         @dir2 = Dir.mktmpdir
         @pidfile2 = Tempfile.new("pid")
         @first_port2 = 15000
         @http_port2 = 16000
         @shepherd_id2 = "id2"
-        system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
+        system("env SHEPHERD_TAKEOVER=false SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
         EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
         EM.stop
       end
