@@ -7,9 +7,11 @@ module Herdis
         class << Fiber.current
           attr_accessor :host
           attr_accessor :port
+          attr_accessor :logger
         end
         Fiber.current.host = env["SERVER_NAME"]
         Fiber.current.port = env["SERVER_PORT"]
+        Fiber.current.logger = env.logger
         super(env)
       end
 

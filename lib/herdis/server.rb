@@ -38,6 +38,7 @@ module Herdis
       opts[:first_port] = ENV["SHEPHERD_FIRST_PORT"].to_i if ENV["SHEPHERD_FIRST_PORT"]
       opts[:dir] = ENV["SHEPHERD_DIR"] if ENV["SHEPHERD_DIR"]
       opts[:shepherd_id] = ENV["SHEPHERD_ID"] if ENV["SHEPHERD_ID"]
+      opts[:inmemory] = ENV["SHEPHERD_INMEMORY"] == "true" if ENV["SHEPHERD_INMEMORY"]
       @@shepherd = Herdis::Shepherd.new(opts)
     end
     

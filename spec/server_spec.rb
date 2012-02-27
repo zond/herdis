@@ -11,16 +11,16 @@ describe Herdis::Server do
         @first_port = 11000
         @http_port = 12000
         @shepherd_id = rand(1 << 256).to_s(36)
-        `env SHEPHERD_DIR=#{@dir} SHEPHERD_FIRST_PORT=#{@first_port} SHEPHERD_ID=#{@shepherd_id} #{File.expand_path('bin/herdis')} -p #{@http_port} -d -P #{@pidfile.path}`
+        system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir} SHEPHERD_FIRST_PORT=#{@first_port} SHEPHERD_ID=#{@shepherd_id} #{File.expand_path('bin/herdis')} -p #{@http_port} -d -P #{@pidfile.path}")
         EM.stop
       end
     end
     
     after :all do
       EM.synchrony do
-        EM::HttpRequest.new("http://localhost:#{@http_port}/").delete
-        Process.kill("QUIT", @pidfile.read.to_i)
-        FileUtils.rm_r(@dir)
+        EM::HttpRequest.new("http://localhost:#{@http_port}/").delete rescue nil
+        Process.kill("QUIT", @pidfile.read.to_i) rescue nil
+        FileUtils.rm_r(@dir) rescue nil
         EM.stop
       end
     end
@@ -67,16 +67,16 @@ describe Herdis::Server do
       EM.synchrony do
         @dir1 = Dir.mktmpdir
         @pidfile1 = Tempfile.new("pid")
-        @first_port1 = 11000
-        @http_port1 = 12000
-        @shepherd_id1 = rand(1 << 256).to_s(36)
-        `env SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path}`
+        @first_port1 = 13000
+        @http_port1 = 14000
+        @shepherd_id1 = "id1"
+        system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
         @dir2 = Dir.mktmpdir
         @pidfile2 = Tempfile.new("pid")
-        @first_port2 = 11000
-        @http_port2 = 12000
-        @shepherd_id2 = rand(1 << 256).to_s(36)
-        `env SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path}`
+        @first_port2 = 15000
+        @http_port2 = 16000
+        @shepherd_id2 = "id2"
+        system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
         EM.stop
       end
     end
@@ -93,7 +93,19 @@ describe Herdis::Server do
       end
     end
 
-    it 'shuts down all its own redists prior to joining'
+    it 'runs only the redises it owns after joining' do
+      EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
+      128.times do |n|
+        Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
+        if n % 2 == 0
+          Proc.new do
+            Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
+          end.should raise_error(Errno::ECONNREFUSED)
+        else
+          Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
+        end
+      end
+    end
 
     it 'gets included in the cluster state'
 

@@ -8,11 +8,13 @@ module Herdis
       attr_accessor :dir
       attr_accessor :redis
       attr_accessor :host
+      attr_accessor :inmemory
       def initialize(options = {})
         @port = options.delete(:port)
         @dir = options.delete(:dir)
         @redis = options.delete(:redis)
         @host = options.delete(:host) || "127.0.0.1"
+        @inmemory = options.delete(:inmemory)
         Dir.mkdir(dir) unless Dir.exists?(dir)
         initialize_redis
       end
@@ -43,10 +45,12 @@ module Herdis
         io.puts("pidfile #{dir}/pid")
         io.puts("port #{port}")
         io.puts("timeout 300")
-        io.puts("save 900 1")
-        io.puts("save 300 10")
-        io.puts("save 60 10000")
-        io.puts("dbfilename dump.rdb")
+        unless inmemory
+          io.puts("save 900 1")
+          io.puts("save 300 10")
+          io.puts("save 60 10000")
+          io.puts("dbfilename dump.rdb")
+        end
         io.puts("dir #{dir}")
         io.puts("logfile stdout")
         io.close
@@ -56,20 +60,27 @@ module Herdis
     attr_reader :dir
     attr_reader :redis
     attr_reader :shards
+    attr_reader :slave_shards
     attr_reader :shepherds
     attr_reader :external_shards
     attr_reader :shepherd_id
     attr_reader :first_port
+    attr_reader :inmemory
 
     def initialize(options = {})
       @dir = options.delete(:dir) || File.join(ENV["HOME"], ".herdis")
       Dir.mkdir(dir) unless Dir.exists?(dir)
       @redis = options.delete(:redis) || "redis-server"
       @first_port = options.delete(:first_port) || 9080
+      @inmemory = options.delete(:inmemory)
       @shepherds = {}
       @external_shards = {}
       @shepherd_id = options.delete(:shepherd_id) || rand(1 << 256).to_s(36)
-      initialize_shards
+      @slave_shards = {}
+      @shards = {}
+      Herdis::Common::SHARDS.times do |shard_id|
+        shards[shard_id] = create_shard(shard_id)
+      end
     end
 
     def join_cluster(url)
@@ -110,12 +121,16 @@ module Herdis
         "shards" => external_shards.merge(shards)
       }
     end
+
+    def shutdown_shard(shard_id)
+      shards[shard_id].connection.shutdown
+      @shards.delete(shard_id)
+    end
     
     def shutdown
-      shards.each do |shard_id, shard|
-        shard.connection.shutdown
+      shards.keys.each do |shard_id|
+        shutdown_shard(shard_id)
       end
-      @shards = {}
     end
 
     def ordinal
@@ -123,7 +138,7 @@ module Herdis
     end
 
     def owned_shards
-      rval = []
+      rval = Set.new
       index = ordinal
       cluster_size = shepherds.size + 1
       while index < Herdis::Common::SHARDS
@@ -138,12 +153,21 @@ module Herdis
       if !new_shepherds.nil? && new_shepherds != shepherds
         updated = true
         @shepherds = new_shepherds
+        update_shards
       end
       if !new_external_shards.nil? && new_external_shards != external_shards
         updated = true
         @external_shards = new_external_shards
       end
-      broadcast_cluster
+      broadcast_cluster if updated
+    end
+
+    def update_shards
+      properly_owned = owned_shards
+      running = Set.new(shards.keys)
+      (properly_owned - running).each do |shard_id|
+        slave_shards[shard_id] = create_shard(shard_id)
+      end
     end
 
     def broadcast_cluster
@@ -156,15 +180,12 @@ module Herdis
       multi.perform while !multi.finished?
     end
 
-    def initialize_shards
-      @shards = {}
-      Herdis::Common::SHARDS.times do |shard_id|
-        shards[shard_id] = Shard.new(:redis => redis, 
-                                     :dir => File.join(dir, "shard#{shard_id}"), 
-                                     :port => first_port + shard_id)
-      end
+    def create_shard(shard_id)
+      Shard.new(:redis => redis, 
+                :dir => File.join(dir, "shard#{shard_id}"), 
+                :inmemory => inmemory,
+                :port => first_port + shard_id)
     end
-
 
   end
 
