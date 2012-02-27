@@ -83,12 +83,12 @@ describe Herdis::Server do
 
     after :all do
       EM.synchrony do
-        EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete
-        Process.kill("QUIT", @pidfile1.read.to_i)
-        FileUtils.rm_r(@dir1)
-        EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete
-        Process.kill("QUIT", @pidfile2.read.to_i)
-        FileUtils.rm_r(@dir2)
+        EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
+        Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
+        FileUtils.rm_r(@dir1) rescue nil
+        EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
+        Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
+        FileUtils.rm_r(@dir2) rescue nil
         EM.stop
       end
     end
