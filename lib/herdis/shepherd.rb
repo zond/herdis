@@ -81,21 +81,14 @@ module Herdis
     def accept_shepherd(shepherd_status)
       new_shepherds = shepherds.rmerge(shepherd_status["id"] => shepherd_status)
       new_shepherds.delete(shepherd_id)
-      if new_shepherds != shepherds
-        @shepherds = new_shepherds
-        broadcast_cluster
-      end
+      update_cluster(new_shepherds, nil)
     end
 
     def merge_cluster(cluster_status)
       new_shepherds = shepherds.rmerge(cluster_status["shepherds"])
       new_shepherds.delete(shepherd_id)
       new_shards = external_shards.rmerge(cluster_status["shards"])
-      if new_shepherds != shepherds || new_shards != external_shards
-        @shepherds = new_shepherds
-        @external_shards = new_shards
-        broadcast_cluster
-      end
+      update_cluster(new_shepherds, new_shards)
     end
 
     def url
@@ -138,6 +131,19 @@ module Herdis
         index += cluster_size
       end
       rval
+    end
+
+    def update_cluster(new_shepherds, new_external_shards)
+      updated = false
+      if !new_shepherds.nil? && new_shepherds != shepherds
+        updated = true
+        @shepherds = new_shepherds
+      end
+      if !new_external_shards.nil? && new_external_shards != external_shards
+        updated = true
+        @external_shards = new_external_shards
+      end
+      broadcast_cluster
     end
 
     def broadcast_cluster
