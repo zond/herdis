@@ -77,6 +77,7 @@ describe Herdis::Server do
         @http_port2 = 16000
         @shepherd_id2 = "id2"
         system("env SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
+        EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
         EM.stop
       end
     end
@@ -94,7 +95,6 @@ describe Herdis::Server do
     end
 
     it 'runs only the redises it owns after joining' do
-      EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
       128.times do |n|
         Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
         if n % 2 == 0
@@ -107,7 +107,12 @@ describe Herdis::Server do
       end
     end
 
-    it 'gets included in the cluster state'
+    it 'gets included in the cluster state' do
+      state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
+      state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+      state1["shepherds"].should == state2["shepherds"]
+      state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
+    end
 
     it 'gets the clusters existing shards'
 
