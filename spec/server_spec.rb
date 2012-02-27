@@ -64,9 +64,33 @@ describe Herdis::Server do
   context 'joining an existing shepherd' do
 
     before :all do
+      EM.synchrony do
+        @dir1 = Dir.mktmpdir
+        @pidfile1 = Tempfile.new("pid")
+        @first_port1 = 11000
+        @http_port1 = 12000
+        @shepherd_id1 = rand(1 << 256).to_s(36)
+        `env SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path}`
+        @dir2 = Dir.mktmpdir
+        @pidfile2 = Tempfile.new("pid")
+        @first_port2 = 11000
+        @http_port2 = 12000
+        @shepherd_id2 = rand(1 << 256).to_s(36)
+        `env SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path}`
+        EM.stop
+      end
     end
 
     after :all do
+      EM.synchrony do
+        EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete
+        Process.kill("QUIT", @pidfile1.read.to_i)
+        FileUtils.rm_r(@dir1)
+        EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete
+        Process.kill("QUIT", @pidfile2.read.to_i)
+        FileUtils.rm_r(@dir2)
+        EM.stop
+      end
     end
 
     it 'shuts down all its own redists prior to joining'
