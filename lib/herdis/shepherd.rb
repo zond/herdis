@@ -4,24 +4,27 @@ module Herdis
   class Shepherd
 
     class Shard
-      attr_accessor :port
-      attr_accessor :dir
-      attr_accessor :redis
-      attr_accessor :host
-      attr_accessor :inmemory
+      attr_accessor :shepherd
+      attr_accessor :id
       attr_accessor :slaveof
       def initialize(options = {})
-        @port = options.delete(:port)
-        @dir = options.delete(:dir)
-        @redis = options.delete(:redis)
-        @host = options.delete(:host) || "127.0.0.1"
-        @inmemory = options.delete(:inmemory)
+        @shepherd = options.delete(:shepherd)
+        @id = options.delete(:id)
         @slaveof = options.delete(:slaveof)
         Dir.mkdir(dir) unless Dir.exists?(dir)
         initialize_redis
       end
+      def dir
+        File.join(shepherd.dir, "shard#{id}")
+      end
+      def port
+        shepherd.first_port + id
+      end
+      def inmemory
+        shepherd.inmemory
+      end
       def connection
-        @connection ||= Redis.new(:host => host, :port => port)
+        @connection ||= Redis.new(:host => "localhost", :port => port)
       end
       def to_json
         Yajl::Encoder.encode("redis://#{Fiber.current.host}:#{port}/")
@@ -37,12 +40,11 @@ module Herdis
         @slaveof = nil
         connection.slaveof("NO", "ONE")
       end
-      private
       def initialize_redis
         begin
           connection.ping
         rescue Errno::ECONNREFUSED => e
-          io = IO.popen("#{redis} -", "w")
+          io = IO.popen("#{shepherd.redis} -", "w")
           write_configuration(io)
         end
       end
@@ -210,9 +212,8 @@ module Herdis
     end
 
     def create_shard(shard_id, options = {})
-      Shard.new(options.merge(:redis => redis, 
-                              :dir => File.join(dir, "shard#{shard_id}"), 
-                              :inmemory => inmemory,
+      Shard.new(options.merge(:shepherd => self,
+                              :id => shard_id,
                               :port => first_port + shard_id))
     end
 
