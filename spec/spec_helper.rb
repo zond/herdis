@@ -6,15 +6,19 @@ require 'tmpdir'
 require 'rspec'
 require 'goliath'
 require 'goliath/test_helper'
-require 'support/event_machine_helpers'
 require 'herdis/server'
 require 'fileutils'
 
 Goliath.env = :test
 
 RSpec.configure do |c|
+  c.around(:each) do |example|
+    EM.synchrony do
+      example.run
+      EM.stop
+    end
+  end
   c.include Goliath::TestHelper
-  c.extend EventMachineHelpers
 end
 
 module Goliath

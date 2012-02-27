@@ -19,6 +19,7 @@ require 'herdis/handlers/common'
 require 'herdis/handlers/index'
 require 'herdis/handlers/join_cluster'
 require 'herdis/handlers/update_cluster'
+require 'herdis/handlers/shutdown'
 
 module Herdis
 
@@ -36,14 +37,14 @@ module Herdis
       opts = {}
       opts[:first_port] = ENV["SHEPHERD_FIRST_PORT"].to_i if ENV["SHEPHERD_FIRST_PORT"]
       opts[:dir] = ENV["SHEPHERD_DIR"] if ENV["SHEPHERD_DIR"]
-      opts[:node_id] = ENV["SHEPHERD_NODE_ID"] if ENV["SHEPHERD_NODE_ID"]
+      opts[:shepherd_id] = ENV["SHEPHERD_ID"] if ENV["SHEPHERD_ID"]
       @@shepherd = Herdis::Shepherd.new(opts)
     end
     
     get '/', Herdis::Handlers::Index
     post '/', Herdis::Handlers::JoinCluster
     put '/', Herdis::Handlers::UpdateCluster
-    
+    delete '/', Herdis::Handlers::Shutdown
 
   end
 
