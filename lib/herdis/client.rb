@@ -47,7 +47,7 @@ module Herdis
         raise "Broken cluster, there should be #{Herdis::Common::SHARDS} shards, but are #{@nodes.size}"
       end
       @shepherds = cluster["shepherds"]
-      @dredis = Redis::Distributed.new(cluster["shards"].sort_by do |k,v| k end.collect do |k,v| v end,
+      @dredis = Redis::Distributed.new(cluster["shards"].sort_by do |k,v| k end.collect do |k,v| v["url"] end,
                                        @options)
     end      
 

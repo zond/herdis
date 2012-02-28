@@ -3,6 +3,8 @@ module Herdis
 
   class Shepherd
 
+    CHECK_SLAVE_TIMER = ENV["SHEPHERD_CHECK_SLAVE_TIMER"] || 10
+
     class Shard
       attr_accessor :shepherd
       attr_accessor :id
@@ -27,7 +29,8 @@ module Herdis
         @connection ||= Redis.new(:host => "localhost", :port => port)
       end
       def to_json
-        Yajl::Encoder.encode("redis://#{Fiber.current.host}:#{port}/")
+        Yajl::Encoder.encode("url" => "redis://#{shepherd.host}:#{port}/",
+                             "shepherd_id" => shepherd.shepherd_id)
       end
       def inspect
         begin
@@ -39,6 +42,8 @@ module Herdis
       def liberate!
         @slaveof = nil
         connection.slaveof("NO", "ONE")
+        shepherd.slave_shards.delete(id)
+        shepherd.shards[id] = self
       end
       def initialize_redis
         begin
@@ -103,19 +108,25 @@ module Herdis
 
     def accept_shepherd(shepherd_status)
       new_shepherds = shepherds.rmerge(shepherd_status["id"] => shepherd_status)
-      new_shepherds.delete(shepherd_id)
       update_cluster(new_shepherds, nil)
     end
 
     def merge_cluster(cluster_status)
-      new_shepherds = shepherds.rmerge(cluster_status["shepherds"])
-      new_shepherds.delete(shepherd_id)
+      new_shepherds = shepherds.rmerge(cluster_status["shepherds"].reject do |k,v| k == shepherd_id end)
       new_shards = external_shards.rmerge(cluster_status["shards"])
       update_cluster(new_shepherds, new_shards)
     end
 
+    def host
+      @host ||= Fiber.current.host
+    end
+
+    def port
+      @port ||= Fiber.current.port
+    end
+      
     def url
-      "http://#{Fiber.current.host}:#{Fiber.current.port}"
+      "http://#{host}:#{port}"
     end
 
     def shepherd_status
@@ -169,16 +180,35 @@ module Herdis
       if !new_shepherds.nil? && new_shepherds != shepherds
         updated = true
         @shepherds = new_shepherds
-        update_shards
       end
-      broadcast_cluster if updated
+      if updated
+        update_shards
+        broadcast_cluster 
+      end
     end
 
     def update_shards
-      properly_owned = owned_shards
+      should_be_owned = owned_shards
       running = Set.new(shards.keys)
-      (properly_owned - running).each do |shard_id|
+      slaves = Set.new(slave_shards.keys)
+      externally_owned = Set.new(external_shards.reject do |k,v| 
+                                   v["shepherd_id"] == shepherd_id 
+                                 end.keys.collect do |k| 
+                                   k.to_i 
+                                 end)
+      supposedly_owned = Set.new(external_shards.select do |k,v|
+                                   v["shepherd_id"] == shepherd_id
+                                 end.keys.collect do |k|
+                                   k.to_i
+                                 end)
+      (((should_be_owned & externally_owned) - running) - slaves).each do |shard_id|
         create_slave_shard(shard_id)
+      end
+      (((should_be_owned & slaves) - running) - externally_owned).each do |shard_id|
+        slave_shards[shard_id].liberate!
+      end
+      (((externally_owned & running) - should_be_owned) - slaves).each do |shard_id|
+        shutdown_shard(shard_id)
       end
     end
 
@@ -199,14 +229,29 @@ module Herdis
     def check_slave_shards
       ready_for_liberation = {}
       slave_shards.each do |shard_id, shard|
-        ready_for_liberation[shard_id] = shard if shard.connection.info["master_sync_in_progress"] == "0"
+        if shard.connection.info["master_sync_in_progress"] == "0"
+          current_owner = external_shards[shard_id.to_s]["shepherd_id"]
+          ready_for_liberation[current_owner] ||= {}
+          ready_for_liberation[current_owner][shard_id] = shard 
+        end
+      end
+      ready_for_liberation.each do |shepherd_id, shards|
+        body = {
+          "type" => "Cluster",
+          "shepherds" => {self.shepherd_id => self.shepherd_status},
+          "shards" => shards
+        }
+        Fiber.new do
+          EM::HttpRequest.new(shepherds[shepherd_id]["url"]).put(:body => Yajl::Encoder.encode(body),
+                                                                 :head => {"Content-Type" => "application/json"})
+        end.resume
       end
     end
 
     def create_slave_shard(shard_id)
-      u = URI.parse(external_shards[shard_id.to_s])
+      u = URI.parse(external_shards[shard_id.to_s]["url"])
       slave_shards[shard_id] = create_shard(shard_id, :slaveof => u)
-      @check_slave_timer ||= EM.add_periodic_timer(10) do
+      @check_slave_timer ||= EM.add_periodic_timer(CHECK_SLAVE_TIMER) do
         check_slave_shards
       end
     end
