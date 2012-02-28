@@ -61,7 +61,7 @@ describe Herdis::Server do
     
   end
 
-  context 'joining an existing shepherd' do
+  context 'joining each other' do
 
     context 'with real slow takeover' do
 
@@ -172,6 +172,35 @@ describe Herdis::Server do
         end
       end
       
+      it 'shuts down its non-owned master shards when they are broadcast from their owner' do
+        proper_redises_running = nil
+        100.times do
+          proper_redises_running = true
+          128.times do |n|
+            if n % 2 == 0
+              proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG"
+              begin
+                Redis.new(:host => "localhost", :port => @first_port2 + n).ping
+                raise "Should raise exception!"
+              rescue Errno::ECONNREFUSED => e
+                proper_redises_running &= true
+              end
+            else
+              proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG"
+              begin
+                Redis.new(:host => "localhost", :port => @first_port1 + n).ping
+                raise "Should raise exception!"
+              rescue Errno::ECONNREFUSED => e
+                proper_redises_running &= true
+              end
+            end
+          end
+          break if proper_redises_running
+          EM::Synchrony.sleep 0.5
+        end
+        proper_redises_running.should == true
+      end
+
       it 'makes its slave shards masters when the master shards disappear' do
         proper_ownership = nil
         data = nil
@@ -208,16 +237,6 @@ describe Herdis::Server do
       end
       
     end
-
-  end
-
-  context 'when being joined by a new shepherd' do
-    
-    it 'accepts the new shepherd'
-
-    it 'broadcasts the new cluster state'
-
-    it 'shuts down its non-owned master shards when they are broadcasted from their owner'
 
   end
 
