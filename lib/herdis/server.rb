@@ -20,6 +20,7 @@ require 'herdis/handlers/index'
 require 'herdis/handlers/join_cluster'
 require 'herdis/handlers/update_cluster'
 require 'herdis/handlers/shutdown'
+require 'herdis/handlers/ping'
 
 module Herdis
 
@@ -33,6 +34,11 @@ module Herdis
       @@shepherd
     end
 
+    def self.shutdown
+      @@shepherd.shutdown unless @@shepherd.nil?
+      @@shepherd = nil
+    end
+
     def initialize
       opts = {}
       opts[:first_port] = ENV["SHEPHERD_FIRST_PORT"].to_i if ENV["SHEPHERD_FIRST_PORT"]
@@ -43,6 +49,7 @@ module Herdis
     end
     
     get '/', Herdis::Handlers::Index
+    head '/', Herdis::Handlers::Ping
     post '/', Herdis::Handlers::JoinCluster
     put '/', Herdis::Handlers::UpdateCluster
     delete '/', Herdis::Handlers::Shutdown

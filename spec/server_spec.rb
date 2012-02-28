@@ -178,18 +178,28 @@ describe Herdis::Server do
           proper_redises_running = true
           128.times do |n|
             if n % 2 == 0
-              proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG"
+              begin
+                proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG"
+              rescue Errno::ECONNREFUSED => e
+                puts "no redis running on #{@first_port1 + n}!"
+                proper_redises_running = false
+              end
               begin
                 Redis.new(:host => "localhost", :port => @first_port2 + n).ping
-                raise "Should raise exception!"
+                proper_redises_running = false
               rescue Errno::ECONNREFUSED => e
                 proper_redises_running &= true
               end
             else
-              proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG"
+              begin
+                proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG"
+              rescue Errno::ECONNREFUSED => e
+                puts "no redis running on #{@first_port2 + n}!"
+                proper_redises_running = false
+              end
               begin
                 Redis.new(:host => "localhost", :port => @first_port1 + n).ping
-                raise "Should raise exception!"
+                proper_redises_running = false
               rescue Errno::ECONNREFUSED => e
                 proper_redises_running &= true
               end
@@ -204,36 +214,41 @@ describe Herdis::Server do
       it 'makes its slave shards masters when the master shards disappear' do
         proper_ownership = nil
         data = nil
-        100.times do
-          data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-          proper_ownership = true
-          128.times do |n|
-            if n % 2 == 0
-              proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
-            else
-              proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+        begin
+          100.times do
+            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
+            proper_ownership = true
+            128.times do |n|
+              if n % 2 == 0
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+              else
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+              end
             end
+            break if proper_ownership
+            EM::Synchrony.sleep 0.5
           end
-          break if proper_ownership
-          EM::Synchrony.sleep 0.5
-        end
-        pp data unless proper_ownership
-        proper_ownership.should == true
-        100.times do
-          data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-          proper_ownership = true
-          128.times do |n|
-            if n % 2 == 0
-              proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
-            else
-              proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+          pp data unless proper_ownership
+          proper_ownership.should == true
+          100.times do
+            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+            proper_ownership = true
+            128.times do |n|
+              if n % 2 == 0
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+              else
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+              end
             end
+            break if proper_ownership
+            EM::Synchrony.sleep 0.5
           end
-          break if proper_ownership
-          EM::Synchrony.sleep 0.5
+          pp data unless proper_ownership
+          proper_ownership.should == true
+        rescue Exception => e
+          pp data
+          raise e
         end
-        pp data unless proper_ownership
-        proper_ownership.should == true
       end
       
     end

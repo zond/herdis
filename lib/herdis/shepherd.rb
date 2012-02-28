@@ -4,6 +4,7 @@ module Herdis
   class Shepherd
 
     CHECK_SLAVE_TIMER = ENV["SHEPHERD_CHECK_SLAVE_TIMER"] || 10
+    CHECK_PREDECESSOR_TIMER = ENV["SHEPHERD_CHECK_SLAVE_TIMER"] || 1
 
     class Shard
       attr_accessor :shepherd
@@ -20,7 +21,7 @@ module Herdis
         File.join(shepherd.dir, "shard#{id}")
       end
       def port
-        shepherd.first_port + id
+        shepherd.first_port + id.to_i
       end
       def inmemory
         shepherd.inmemory
@@ -42,8 +43,8 @@ module Herdis
       def liberate!
         @slaveof = nil
         connection.slaveof("NO", "ONE")
-        shepherd.slave_shards.delete(id)
-        shepherd.shards[id] = self
+        shepherd.slave_shards.delete(id.to_s)
+        shepherd.shards[id.to_s] = self
       end
       def initialize_redis
         begin
@@ -100,19 +101,30 @@ module Herdis
       end
     end
 
+    def ensure_predecessor_check
+      @check_predecessor_timer ||= EM.add_periodic_timer(CHECK_PREDECESSOR_TIMER) do
+        check_predecessor
+      end
+    end
+
     def join_cluster(url)
       shutdown
       EM::HttpRequest.new(url).put(:body => Yajl::Encoder.encode(shepherd_status),
                                    :head => {"Content-Type" => "application/json"})
+      ensure_predecessor_check
     end
 
     def accept_shepherd(shepherd_status)
       new_shepherds = shepherds.rmerge(shepherd_status["id"] => shepherd_status)
       update_cluster(new_shepherds, nil)
+      ensure_predecessor_check
     end
 
     def merge_cluster(cluster_status)
       new_shepherds = shepherds.rmerge(cluster_status["shepherds"].reject do |k,v| k == shepherd_id end)
+      (cluster_status["removed_shepherds"] || []).each do |shepherd_id|
+        new_shepherds.delete(shepherd_id)
+      end
       new_shards = external_shards.rmerge(cluster_status["shards"])
       update_cluster(new_shepherds, new_shards)
     end
@@ -146,8 +158,8 @@ module Herdis
     end
 
     def shutdown_shard(shard_id)
-      shards[shard_id].connection.shutdown
-      @shards.delete(shard_id)
+      shards[shard_id.to_s].connection.shutdown
+      @shards.delete(shard_id.to_s)
     end
     
     def shutdown
@@ -165,13 +177,14 @@ module Herdis
       index = ordinal
       cluster_size = shepherds.size + 1
       while index < Herdis::Common::SHARDS
-        rval << index
+        rval << index.to_s
         index += cluster_size
       end
       rval
     end
 
     def update_cluster(new_shepherds, new_external_shards)
+      removed_shepherds = []
       updated = false
       if !new_external_shards.nil? && new_external_shards != external_shards
         updated = true
@@ -179,11 +192,12 @@ module Herdis
       end
       if !new_shepherds.nil? && new_shepherds != shepherds
         updated = true
+        removed_shepherds = (Set.new(@shepherds.keys) - Set.new(new_shepherds.keys)).to_a
         @shepherds = new_shepherds
       end
       if updated
         update_shards
-        broadcast_cluster 
+        broadcast_cluster(removed_shepherds)
       end
     end
 
@@ -193,37 +207,57 @@ module Herdis
       slaves = Set.new(slave_shards.keys)
       externally_owned = Set.new(external_shards.reject do |k,v| 
                                    v["shepherd_id"] == shepherd_id 
-                                 end.keys.collect do |k| 
-                                   k.to_i 
-                                 end)
+                                 end.keys)
       supposedly_owned = Set.new(external_shards.select do |k,v|
                                    v["shepherd_id"] == shepherd_id
-                                 end.keys.collect do |k|
-                                   k.to_i
-                                 end)
+                                 end.keys)
       (((should_be_owned & externally_owned) - running) - slaves).each do |shard_id|
         create_slave_shard(shard_id)
       end
       (((should_be_owned & slaves) - running) - externally_owned).each do |shard_id|
-        slave_shards[shard_id].liberate!
+        slave_shards[shard_id.to_s].liberate!
       end
       (((externally_owned & running) - should_be_owned) - slaves).each do |shard_id|
         shutdown_shard(shard_id)
       end
     end
 
-    def broadcast_cluster
+    def broadcast_cluster(removed_shepherds)
       multi = EM::Synchrony::Multi.new
+      body = cluster_status.merge("removed_shepherds" => removed_shepherds)
       shepherds.each do |shepherd_id, shepherd|
         multi.add(shepherd_id, 
-                  EM::HttpRequest.new(shepherd["url"]).aput(:body => Yajl::Encoder.encode(cluster_status),
+                  EM::HttpRequest.new(shepherd["url"]).aput(:body => Yajl::Encoder.encode(body),
                                                             :head => {"Content-Type" => "application/json"}))
       end
       multi.perform while !multi.finished?
     end
 
     def create_master_shard(shard_id)
-      shards[shard_id] = create_shard(shard_id)
+      shards[shard_id.to_s] = create_shard(shard_id)
+    end
+
+    def status
+      204
+    end
+
+    def predecessor
+      ordered_shepherd_keys = (shepherds.keys + [shepherd_id]).sort
+      my_index = ordered_shepherd_keys.index(shepherd_id)
+      if my_index == 0
+        shepherds[ordered_shepherd_keys.last]
+      else
+        shepherds[ordered_shepherd_keys[my_index - 1]]
+      end
+    end
+
+    def check_predecessor
+      pre = predecessor
+      Fiber.new do
+        if EM::HttpRequest.new(predecessor["url"]).head.response_header.status != 204
+          merge_cluster("removed_shepherds" => [predecessor["id"]])
+        end
+      end.resume
     end
 
     def check_slave_shards
@@ -250,7 +284,7 @@ module Herdis
 
     def create_slave_shard(shard_id)
       u = URI.parse(external_shards[shard_id.to_s]["url"])
-      slave_shards[shard_id] = create_shard(shard_id, :slaveof => u)
+      slave_shards[shard_id.to_s] = create_shard(shard_id, :slaveof => u)
       @check_slave_timer ||= EM.add_periodic_timer(CHECK_SLAVE_TIMER) do
         check_slave_shards
       end
@@ -258,8 +292,7 @@ module Herdis
 
     def create_shard(shard_id, options = {})
       Shard.new(options.merge(:shepherd => self,
-                              :id => shard_id,
-                              :port => first_port + shard_id))
+                              :id => shard_id))
     end
 
   end

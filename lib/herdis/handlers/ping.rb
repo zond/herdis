@@ -3,12 +3,11 @@ module Herdis
 
    module Handlers
 
-    class Shutdown < Goliath::API
+    class Ping < Goliath::API
       include Common
 
       def response(env)
-        Server.shutdown
-        [200, {}, ""]
+        [Server.shepherd.status, {}, ""]
       end
       
     end
