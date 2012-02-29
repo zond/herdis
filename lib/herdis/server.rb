@@ -21,6 +21,7 @@ require 'herdis/handlers/join_cluster'
 require 'herdis/handlers/update_cluster'
 require 'herdis/handlers/shutdown'
 require 'herdis/handlers/ping'
+require 'herdis/handlers/info'
 
 module Herdis
 
@@ -45,10 +46,12 @@ module Herdis
       opts[:dir] = ENV["SHEPHERD_DIR"] if ENV["SHEPHERD_DIR"]
       opts[:shepherd_id] = ENV["SHEPHERD_ID"] if ENV["SHEPHERD_ID"]
       opts[:inmemory] = ENV["SHEPHERD_INMEMORY"] == "true" if ENV["SHEPHERD_INMEMORY"]
+      opts[:redundancy] = ENV["SHEPHERD_REDUNDANCY"].to_i if ENV["SHEPHERD_REDUNDANCY"]
       @@shepherd = Herdis::Shepherd.new(opts)
     end
     
     get '/', Herdis::Handlers::Index
+    get '/info', Herdis::Handlers::Info
     head '/', Herdis::Handlers::Ping
     post '/', Herdis::Handlers::JoinCluster
     put '/', Herdis::Handlers::UpdateCluster

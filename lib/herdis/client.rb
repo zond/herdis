@@ -57,6 +57,9 @@ module Herdis
       rescue DeadClusterException => e
         refresh_cluster
         retry
+      rescue Errno::ECONNREFUSED => e
+        refresh_cluster
+        retry
       end
     end
 

@@ -61,10 +61,10 @@ describe Herdis::Server do
     
   end
 
-  context 'joining each other' do
-
-    context 'with real slow takeover' do
-
+  context 'in a cluster' do
+    
+    context 'with redunancy 1' do
+      
       before :all do
         EM.synchrony do
           @dir1 = Dir.mktmpdir
@@ -72,13 +72,13 @@ describe Herdis::Server do
           @first_port1 = 13000
           @http_port1 = 14000
           @shepherd_id1 = "id1"
-          system("env SHEPHERD_CHECK_SLAVE_SHARDS=1000 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
+          system("env SHEPHERD_REDUNDANCY=1 SHEPHERD_CHECK_SLAVE_SHARDS=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
           @dir2 = Dir.mktmpdir
           @pidfile2 = Tempfile.new("pid")
           @first_port2 = 15000
           @http_port2 = 16000
           @shepherd_id2 = "id2"
-          system("env SHEPHERD_CHECK_SLAVE_SHARDS=1000 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
+          system("env SHEPHERD_REDUNDANCY=1 SHEPHERD_CHECK_SLAVE_SHARDS=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
           EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
           EM.stop
         end
@@ -95,113 +95,39 @@ describe Herdis::Server do
           EM.stop
         end
       end
-      
-      it 'runs only the redises it owns after joining' do
-        128.times do |n|
-          Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
-          if n % 2 == 0
-            Proc.new do
-              Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
-            end.should raise_error(Errno::ECONNREFUSED)
-          else
-            Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
-          end
-        end
-      end
-      
-      it 'gets included in the cluster state' do
-        state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-        state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-        state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
-        state1["shepherds"].should == state2["shepherds"]
-      end
-      
-      it 'gets the clusters existing shards' do
-        state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-        state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-        128.times do |n|
-          state1["shards"][n.to_s]["url"].should == "redis://localhost:#{@first_port1 + n}/"
-        end
-        state1["shards"].should == state2["shards"]
-      end
-      
-      it 'starts slave shards for all shards in the cluster it should own' do
-        128.times do |n|
-          if n % 2 == 1
-            r = Redis.new(:host => "localhost", :port => @first_port2 + n)
-            info = r.info
-            info["role"].should == "slave"
-            info["master_host"].should == "localhost"
-            info["master_port"].to_i.should == @first_port1 + n
-          end
-        end
-      end
 
-    end
-
-    context 'with real fast takeover' do
-
-      before :all do
-        EM.synchrony do
-          @dir1 = Dir.mktmpdir
-          @pidfile1 = Tempfile.new("pid")
-          @first_port1 = 13000
-          @http_port1 = 14000
-          @shepherd_id1 = "id1"
-          system("env SHEPHERD_CHECK_SLAVE_TIMER=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
-          @dir2 = Dir.mktmpdir
-          @pidfile2 = Tempfile.new("pid")
-          @first_port2 = 15000
-          @http_port2 = 16000
-          @shepherd_id2 = "id2"
-          system("env SHEPHERD_CHECK_SLAVE_TIMER=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
-          EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
-          EM.stop
-        end
-      end
-      
-      after :all do
-        EM.synchrony do
-          EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
-          Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
-          FileUtils.rm_r(@dir1) rescue nil
-          EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
-          Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
-          FileUtils.rm_r(@dir2) rescue nil
-          EM.stop
-        end
-      end
-      
-      it 'shuts down its non-owned master shards when they are broadcast from their owner' do
+      it 'backs up 1 predecessor using slave shards' do
         proper_redises_running = nil
         100.times do
           proper_redises_running = true
           128.times do |n|
             if n % 2 == 0
               begin
-                proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG"
+                proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).info["role"] == "master")
               rescue Errno::ECONNREFUSED => e
-                puts "no redis running on #{@first_port1 + n}!"
                 proper_redises_running = false
               end
               begin
-                Redis.new(:host => "localhost", :port => @first_port2 + n).ping
-                proper_redises_running = false
+                info = Redis.new(:host => "localhost", :port => @first_port2 + n).info
+                proper_redises_running &= (info["role"] == "slave")
+                proper_redises_running &= (info["master_host"] == "localhost")
+                proper_redises_running &= (info["master_port"].to_i == @first_port1 + n)
               rescue Errno::ECONNREFUSED => e
-                proper_redises_running &= true
+                proper_redises_running &= false
               end
             else
               begin
-                proper_redises_running &= Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG"
+                proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port2 + n).info["role"] == "master")
               rescue Errno::ECONNREFUSED => e
-                puts "no redis running on #{@first_port2 + n}!"
                 proper_redises_running = false
               end
               begin
-                Redis.new(:host => "localhost", :port => @first_port1 + n).ping
-                proper_redises_running = false
+                info = Redis.new(:host => "localhost", :port => @first_port1 + n).info
+                proper_redises_running &= (info["role"] == "slave")
+                proper_redises_running &= (info["master_host"] == "localhost")
+                proper_redises_running &= (info["master_port"].to_i == @first_port2 + n)
               rescue Errno::ECONNREFUSED => e
-                proper_redises_running &= true
+                proper_redises_running &= false
               end
             end
           end
@@ -210,58 +136,206 @@ describe Herdis::Server do
         end
         proper_redises_running.should == true
       end
+      
+    end
 
-      it 'makes its slave shards masters when the master shards disappear' do
-        proper_ownership = nil
-        data = nil
-        begin
-          100.times do
-            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-            proper_ownership = true
-            128.times do |n|
-              if n % 2 == 0
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
-              else
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
-              end
-            end
-            break if proper_ownership
-            EM::Synchrony.sleep 0.5
+    context 'without redundancy' do
+      
+      context 'with real slow takeover' do
+        
+        before :all do
+          EM.synchrony do
+            @dir1 = Dir.mktmpdir
+            @pidfile1 = Tempfile.new("pid")
+            @first_port1 = 13000
+            @http_port1 = 14000
+            @shepherd_id1 = "id1"
+            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_SHARDS=1000 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
+            @dir2 = Dir.mktmpdir
+            @pidfile2 = Tempfile.new("pid")
+            @first_port2 = 15000
+            @http_port2 = 16000
+            @shepherd_id2 = "id2"
+            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_SHARDS=1000 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
+            EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
+            EM.stop
           end
-          pp data unless proper_ownership
-          proper_ownership.should == true
-          100.times do
-            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-            proper_ownership = true
-            128.times do |n|
-              if n % 2 == 0
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
-              else
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
-              end
-            end
-            break if proper_ownership
-            EM::Synchrony.sleep 0.5
-          end
-          pp data unless proper_ownership
-          proper_ownership.should == true
-        rescue Exception => e
-          pp data
-          raise e
         end
+        
+        after :all do
+          EM.synchrony do
+            EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
+            Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
+            FileUtils.rm_r(@dir1) rescue nil
+            EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
+            Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
+            FileUtils.rm_r(@dir2) rescue nil
+            EM.stop
+          end
+        end
+        
+        it 'runs only the redises it owns after joining' do
+          128.times do |n|
+            Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
+            if n % 2 == 0
+              Proc.new do
+                Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
+              end.should raise_error(Errno::ECONNREFUSED)
+            else
+              Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
+            end
+          end
+        end
+        
+        it 'gets included in the cluster state' do
+          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
+          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+          state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
+          state1["shepherds"].should == state2["shepherds"]
+        end
+        
+        it 'gets the clusters existing shards' do
+          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
+          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+          128.times do |n|
+            state1["shards"][n.to_s]["url"].should == "redis://localhost:#{@first_port1 + n}/"
+          end
+          state1["shards"].should == state2["shards"]
+        end
+        
+        it 'starts slave shards for all shards in the cluster it should own' do
+          128.times do |n|
+            if n % 2 == 1
+              r = Redis.new(:host => "localhost", :port => @first_port2 + n)
+              info = r.info
+              info["role"].should == "slave"
+              info["master_host"].should == "localhost"
+              info["master_port"].to_i.should == @first_port1 + n
+            end
+          end
+        end
+        
       end
       
+      context 'with real fast takeover' do
+        
+        before :all do
+          EM.synchrony do
+            @dir1 = Dir.mktmpdir
+            @pidfile1 = Tempfile.new("pid")
+            @first_port1 = 13000
+            @http_port1 = 14000
+            @shepherd_id1 = "id1"
+            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_TIMER=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
+            @dir2 = Dir.mktmpdir
+            @pidfile2 = Tempfile.new("pid")
+            @first_port2 = 15000
+            @http_port2 = 16000
+            @shepherd_id2 = "id2"
+            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_TIMER=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
+            EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
+            EM.stop
+          end
+        end
+        
+        after :all do
+          EM.synchrony do
+            EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
+            Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
+            FileUtils.rm_r(@dir1) rescue nil
+            EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
+            Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
+            FileUtils.rm_r(@dir2) rescue nil
+            EM.stop
+          end
+        end
+        
+        it 'shuts down its non-owned master shards when they are broadcast from their owner' do
+          proper_redises_running = nil
+          100.times do
+            proper_redises_running = true
+            128.times do |n|
+              if n % 2 == 0
+                begin
+                  proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG")
+                rescue Errno::ECONNREFUSED => e
+                  proper_redises_running = false
+                end
+                begin
+                  Redis.new(:host => "localhost", :port => @first_port2 + n).ping
+                  proper_redises_running = false
+                rescue Errno::ECONNREFUSED => e
+                  proper_redises_running &= true
+                end
+              else
+                begin
+                  proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG")
+                rescue Errno::ECONNREFUSED => e
+                  proper_redises_running = false
+                end
+                begin
+                  Redis.new(:host => "localhost", :port => @first_port1 + n).ping
+                  proper_redises_running = false
+                rescue Errno::ECONNREFUSED => e
+                  proper_redises_running &= true
+                end
+              end
+            end
+            break if proper_redises_running
+            EM::Synchrony.sleep 0.5
+          end
+          proper_redises_running.should == true
+        end
+
+        it 'makes its slave shards masters when the master shards disappear' do
+          proper_ownership = nil
+          data = nil
+          begin
+            100.times do
+              data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
+              proper_ownership = true
+              128.times do |n|
+                if n % 2 == 0
+                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+                else
+                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+                end
+              end
+              break if proper_ownership
+              EM::Synchrony.sleep 0.5
+            end
+            pp data unless proper_ownership
+            proper_ownership.should == true
+            100.times do
+              data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+              proper_ownership = true
+              128.times do |n|
+                if n % 2 == 0
+                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+                else
+                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+                end
+              end
+              break if proper_ownership
+              EM::Synchrony.sleep 0.5
+            end
+            pp data unless proper_ownership
+            proper_ownership.should == true
+          rescue Exception => e
+            pp data
+            raise e
+          end
+        end
+
+      end
+        
     end
 
   end
 
-  context 'when being in a cluster' do
+  context 'when the cluster crashes' do
     
-    it 'regularly pings its predecessor to make sure it is alive'
-
-    it 'broadcasts a new cluster state if the predecessor doesnt respond'
-
-    it 'backs up N predecessors using slave shards'
+    it 'regularly pings its predecessor and broadcasts a new cluster state if the predecessor doesnt respond'
 
     it 'broadcasts its backup shards as master shards when the old master shards disappear'
 
