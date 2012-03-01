@@ -5,24 +5,22 @@ describe Herdis::Server do
   context 'starting up from scratch' do
     
     before :all do
-      EM.synchrony do
-        @dir = Dir.mktmpdir
-        @pidfile = Tempfile.new("pid")
-        @first_port = 11000
-        @http_port = 12000
-        @shepherd_id = rand(1 << 256).to_s(36)
-        system("env SHEPHERD_DIR=#{@dir} SHEPHERD_FIRST_PORT=#{@first_port} SHEPHERD_ID=#{@shepherd_id} #{File.expand_path('bin/herdis')} -p #{@http_port} -d -P #{@pidfile.path}")
-        EM.stop
-      end
+      @dir = Dir.mktmpdir
+      @pidfile = Tempfile.new("pid")
+      @first_port = 11000
+      @http_port = 12000
+      @shepherd_id = rand(1 << 256).to_s(36)
+      start_server(@http_port, 
+                   @pidfile.path, 
+                   :inmemory => true, 
+                   :dir => @dir, 
+                   :first_port => @first_port, 
+                   :shepherd_id => @shepherd_id)
+      wait_for_server(@http_port)
     end
     
     after :all do
-      EM.synchrony do
-        EM::HttpRequest.new("http://localhost:#{@http_port}/").delete rescue nil
-        Process.kill("QUIT", @pidfile.read.to_i) rescue nil
-        FileUtils.rm_r(@dir) rescue nil
-        EM.stop
-      end
+      stop_server(@http_port, @pidfile, @dir)
     end
     
     it 'starts 128 redises at the provided port' do
@@ -66,39 +64,42 @@ describe Herdis::Server do
     context 'with redunancy 1' do
       
       before :all do
-        EM.synchrony do
-          @dir1 = Dir.mktmpdir
-          @pidfile1 = Tempfile.new("pid")
-          @first_port1 = 13000
-          @http_port1 = 14000
-          @shepherd_id1 = "id1"
-          system("env SHEPHERD_REDUNDANCY=1 SHEPHERD_CHECK_SLAVE_SHARDS=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
-          @dir2 = Dir.mktmpdir
-          @pidfile2 = Tempfile.new("pid")
-          @first_port2 = 15000
-          @http_port2 = 16000
-          @shepherd_id2 = "id2"
-          system("env SHEPHERD_REDUNDANCY=1 SHEPHERD_CHECK_SLAVE_SHARDS=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
-          EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
-          EM.stop
-        end
+        @dir1 = Dir.mktmpdir
+        @pidfile1 = Tempfile.new("pid")
+        @first_port1 = 13000
+        @http_port1 = 14000
+        @shepherd_id1 = "id1"
+        start_server(@http_port1, 
+                     @pidfile1.path, 
+                     :redundancy => 1, 
+                     :check_slave_timer => 0.5,
+                     :dir => @dir1, 
+                     :first_port => @first_port1, 
+                     :shepherd_id => @shepherd_id1)
+        wait_for_server(@http_port1)
+        @dir2 = Dir.mktmpdir
+        @pidfile2 = Tempfile.new("pid")
+        @first_port2 = 15000
+        @http_port2 = 16000
+        @shepherd_id2 = "id2"
+        start_server(@http_port2, 
+                     @pidfile2.path, 
+                     :connect_to => "http://localhost:#{@http_port1}",
+                     :redundancy => 1, 
+                     :check_slave_timer => 0.5,
+                     :dir => @dir2, 
+                     :first_port => @first_port2, 
+                     :shepherd_id => @shepherd_id2)
+        wait_for_server(@http_port2)
       end
       
       after :all do
-        EM.synchrony do
-          EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
-          Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
-          FileUtils.rm_r(@dir1) rescue nil
-          EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
-          Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
-          FileUtils.rm_r(@dir2) rescue nil
-          EM.stop
-        end
+        stop_server(@http_port1, @pidfile1, @dir1)
+        stop_server(@http_port2, @pidfile2, @dir2)
       end
 
       it 'backs up 1 predecessor using slave shards' do
-        proper_redises_running = nil
-        100.times do
+        assert_true_within(20) do
           proper_redises_running = true
           128.times do |n|
             if n % 2 == 0
@@ -131,10 +132,8 @@ describe Herdis::Server do
               end
             end
           end
-          break if proper_redises_running
-          EM::Synchrony.sleep 0.5
+          proper_redises_running
         end
-        proper_redises_running.should == true
       end
       
     end
@@ -144,34 +143,38 @@ describe Herdis::Server do
       context 'with real slow takeover' do
         
         before :all do
-          EM.synchrony do
-            @dir1 = Dir.mktmpdir
-            @pidfile1 = Tempfile.new("pid")
-            @first_port1 = 13000
-            @http_port1 = 14000
-            @shepherd_id1 = "id1"
-            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_SHARDS=1000 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
-            @dir2 = Dir.mktmpdir
-            @pidfile2 = Tempfile.new("pid")
-            @first_port2 = 15000
-            @http_port2 = 16000
-            @shepherd_id2 = "id2"
-            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_SHARDS=1000 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
-            EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
-            EM.stop
-          end
+          @dir1 = Dir.mktmpdir
+          @pidfile1 = Tempfile.new("pid")
+          @first_port1 = 13000
+          @http_port1 = 14000
+          @shepherd_id1 = "id1"
+          start_server(@http_port1, 
+                       @pidfile1.path, 
+                       :check_slave_timer => 10000,
+                       :shepherd_redundancy => 0, 
+                       :dir => @dir1, 
+                       :first_port => @first_port1, 
+                       :shepherd_id => @shepherd_id1)
+          wait_for_server(@http_port1)
+          @dir2 = Dir.mktmpdir
+          @pidfile2 = Tempfile.new("pid")
+          @first_port2 = 15000
+          @http_port2 = 16000
+          @shepherd_id2 = "id2"
+          start_server(@http_port2, 
+                       @pidfile2.path, 
+                       :check_slave_timer => 10000,
+                       :connect_to => "http://localhost:#{@http_port1}",
+                       :shepherd_redundancy => 0, 
+                       :dir => @dir2, 
+                       :first_port => @first_port2, 
+                       :shepherd_id => @shepherd_id2)
+          wait_for_server(@http_port2)
         end
         
         after :all do
-          EM.synchrony do
-            EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
-            Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
-            FileUtils.rm_r(@dir1) rescue nil
-            EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
-            Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
-            FileUtils.rm_r(@dir2) rescue nil
-            EM.stop
-          end
+          stop_server(@http_port1, @pidfile1, @dir1)
+          stop_server(@http_port2, @pidfile2, @dir2)
         end
         
         it 'runs only the redises it owns after joining' do
@@ -220,34 +223,38 @@ describe Herdis::Server do
       context 'with real fast takeover' do
         
         before :all do
-          EM.synchrony do
-            @dir1 = Dir.mktmpdir
-            @pidfile1 = Tempfile.new("pid")
-            @first_port1 = 13000
-            @http_port1 = 14000
-            @shepherd_id1 = "id1"
-            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_TIMER=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir1} SHEPHERD_FIRST_PORT=#{@first_port1} SHEPHERD_ID=#{@shepherd_id1} #{File.expand_path('bin/herdis')} -p #{@http_port1} -d -P #{@pidfile1.path} -l /Users/zond/tmp/l1")
-            @dir2 = Dir.mktmpdir
-            @pidfile2 = Tempfile.new("pid")
-            @first_port2 = 15000
-            @http_port2 = 16000
-            @shepherd_id2 = "id2"
-            system("env SHEPHERD_REDUNDANCY=0 SHEPHERD_CHECK_SLAVE_TIMER=0.5 SHEPHERD_INMEMORY=true SHEPHERD_DIR=#{@dir2} SHEPHERD_FIRST_PORT=#{@first_port2} SHEPHERD_ID=#{@shepherd_id2} #{File.expand_path('bin/herdis')} -p #{@http_port2} -d -P #{@pidfile2.path} -l /Users/zond/tmp/l2")
-            EM::HttpRequest.new("http://localhost:#{@http_port2}/?url=#{CGI.escape("http://localhost:#{@http_port1}/")}").post.response
-            EM.stop
-          end
+          @dir1 = Dir.mktmpdir
+          @pidfile1 = Tempfile.new("pid")
+          @first_port1 = 13000
+          @http_port1 = 14000
+          @shepherd_id1 = "id1"
+          start_server(@http_port1, 
+                       @pidfile1.path, 
+                       :check_slave_timer => 0.5,
+                       :shepherd_redundancy => 0, 
+                       :dir => @dir1, 
+                       :first_port => @first_port1, 
+                       :shepherd_id => @shepherd_id1)
+          wait_for_server(@http_port1)
+          @dir2 = Dir.mktmpdir
+          @pidfile2 = Tempfile.new("pid")
+          @first_port2 = 15000
+          @http_port2 = 16000
+          @shepherd_id2 = "id2"
+          start_server(@http_port2, 
+                       @pidfile2.path, 
+                       :check_slave_timer => 0.5,
+                       :connect_to => "http://localhost:#{@http_port1}",
+                       :shepherd_redundancy => 0, 
+                       :dir => @dir2, 
+                       :first_port => @first_port2, 
+                       :shepherd_id => @shepherd_id2)
+          wait_for_server(@http_port2)
         end
         
         after :all do
-          EM.synchrony do
-            EM::HttpRequest.new("http://localhost:#{@http_port1}/").delete rescue nil
-            Process.kill("QUIT", @pidfile1.read.to_i) rescue nil
-            FileUtils.rm_r(@dir1) rescue nil
-            EM::HttpRequest.new("http://localhost:#{@http_port2}/").delete rescue nil
-            Process.kill("QUIT", @pidfile2.read.to_i) rescue nil
-            FileUtils.rm_r(@dir2) rescue nil
-            EM.stop
-          end
+          stop_server(@http_port1, @pidfile1, @dir1)
+          stop_server(@http_port2, @pidfile2, @dir2)
         end
         
         it 'shuts down its non-owned master shards when they are broadcast from their owner' do

@@ -7,10 +7,10 @@ module Herdis
       include Common
 
       def response(env)
-        if Server.shepherd.nil?
+        if Herdis::Plugins::ShepherdConnection.shepherd.nil?
           [404, {}, ""]
         else
-          [200, {}, Server.shepherd.cluster_info]
+          [200, {}, Herdis::Plugins::ShepherdConnection.shepherd.cluster_info]
         end
       end
       

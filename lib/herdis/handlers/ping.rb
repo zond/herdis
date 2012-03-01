@@ -7,7 +7,7 @@ module Herdis
       include Common
 
       def response(env)
-        [Server.shepherd.status, {}, ""]
+        [Herdis::Plugins::ShepherdConnection.shepherd.status, {}, ""]
       end
       
     end

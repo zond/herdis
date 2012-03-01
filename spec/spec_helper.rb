@@ -9,6 +9,10 @@ require 'goliath/test_helper'
 require 'herdis/server'
 require 'fileutils'
 
+$LOAD_PATH.unshift dir
+
+require 'support/server_support'
+
 Goliath.env = :test
 
 RSpec.configure do |c|
@@ -18,6 +22,7 @@ RSpec.configure do |c|
       EM.stop
     end
   end
+  c.include Support::ServerSupport
   c.include Goliath::TestHelper
 end
 

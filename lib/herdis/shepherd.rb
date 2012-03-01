@@ -91,11 +91,15 @@ module Herdis
     attr_reader :inmemory
     attr_reader :check_slave_timer
     attr_reader :redundancy
+    attr_reader :port
+    attr_reader :logger
 
     def initialize(options = {})
       @dir = options.delete(:dir) || File.join(ENV["HOME"], ".herdis")
       Dir.mkdir(dir) unless Dir.exists?(dir)
       @redis = options.delete(:redis) || "redis-server"
+      @port = options.delete(:port) || 9000
+      @logger = options.delete(:logger)
       @first_port = options.delete(:first_port) || 9080
       @inmemory = options.delete(:inmemory)
       @redundancy = options.delete(:redundancy) || 2
@@ -104,8 +108,12 @@ module Herdis
       @shepherd_id = options.delete(:shepherd_id) || rand(1 << 256).to_s(36)
       @slave_shards = {}
       @shards = {}
-      Herdis::Common::SHARDS.times do |shard_id|
-        create_master_shard(shard_id)
+      if connect_to = options.delete(:connect_to)
+        join_cluster(connect_to)
+      else
+        Herdis::Common::SHARDS.times do |shard_id|
+          create_master_shard(shard_id)
+        end
       end
     end
 
@@ -117,8 +125,9 @@ module Herdis
 
     def join_cluster(url)
       shutdown
-      EM::HttpRequest.new(url).put(:body => Yajl::Encoder.encode(shepherd_status),
-                                   :head => {"Content-Type" => "application/json"})
+      resp = EM::HttpRequest.new(url).put(:body => Yajl::Encoder.encode(shepherd_status),
+                                          :head => {"Content-Type" => "application/json"}).response
+      merge_cluster(Yajl::Parser.parse(resp))
       ensure_predecessor_check
     end
 
@@ -141,13 +150,10 @@ module Herdis
     end
 
     def host
-      @host ||= Fiber.current.host
+      @host ||= Fiber.current.host if Fiber.current.respond_to?(:host)
+      @host || "localhost"
     end
 
-    def port
-      @port ||= Fiber.current.port
-    end
-      
     def url
       "http://#{host}:#{port}"
     end
@@ -190,6 +196,10 @@ module Herdis
       shards.keys.each do |shard_id|
         shutdown_shard(shard_id)
       end
+      slave_shards.each do |shard_id, shard|
+        shard.connection.shutdown
+      end
+      slave_shards = {}
     end
 
     def ordinal
@@ -231,7 +241,6 @@ module Herdis
       #
       # Shards that I have slaves for but nobody else is running should be liberated.
       #
-      puts "slaves is #{slaves.inspect}, externally_running is #{externally_running.inspect}"
       (slaves - externally_running).each do |shard_id|
         slave_shards[shard_id.to_s].liberate!
       end

@@ -7,7 +7,7 @@ module Herdis
       include Common
 
       def response(env)
-        Server.shutdown
+        Herdis::Plugins::ShepherdConnection.shutdown
         [200, {}, ""]
       end
       

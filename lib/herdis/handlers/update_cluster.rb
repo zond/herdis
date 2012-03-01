@@ -9,13 +9,13 @@ module Herdis
       def response(env)
         data = env['params']
         if data["type"] == "Shepherd"
-          Server.shepherd.accept_shepherd(data)
+          Herdis::Plugins::ShepherdConnection.shepherd.accept_shepherd(data)
         elsif data["type"] == "Cluster"
-          Server.shepherd.merge_cluster(data)
+          Herdis::Plugins::ShepherdConnection.shepherd.merge_cluster(data)
         else
           raise Goliath::Validation::UnsupportedMediaTypeError.new(data["type"])
         end
-        [200, {}, Server.shepherd.cluster_status]
+        [200, {}, Herdis::Plugins::ShepherdConnection.shepherd.cluster_status]
       end
       
     end
