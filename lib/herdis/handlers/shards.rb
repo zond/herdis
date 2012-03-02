@@ -3,7 +3,7 @@ module Herdis
 
    module Handlers
 
-    class Index < Goliath::API
+    class Shards < Goliath::API
       include Common
 
       def response(env)

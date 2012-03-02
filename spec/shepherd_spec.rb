@@ -7,10 +7,13 @@ describe Herdis::Shepherd do
     context 'starting up from scratch' do
 
       before :all do
-        @dir = Dir.mktmpdir
-        @first_port = 11000
-        @shepherd_id = rand(1 << 256).to_s(36)
-        @shepherd = Herdis::Shepherd.new(:dir => @dir, :first_port => @first_port, :shepherd_id => @shepherd_id)
+        EM.synchrony do
+          @dir = Dir.mktmpdir
+          @first_port = 11000
+          @shepherd_id = rand(1 << 256).to_s(36)
+          @shepherd = Herdis::Shepherd.new(:dir => @dir, :first_port => @first_port, :shepherd_id => @shepherd_id)
+          EM.stop
+        end
       end
       
       after :all do

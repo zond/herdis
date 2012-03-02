@@ -36,12 +36,12 @@ describe Herdis::Server do
     end
     
     it 'has the provided shepherd_id on GET' do
-      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/").get.response)
+      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/shards").get.response)
       data["shepherds"].to_a[0][0].should == @shepherd_id
     end
 
     it 'broadcasts 128 shards on the given ports on GET' do
-      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/").get.response)
+      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/shards").get.response)
       data["shards"].size.should == 128
       128.times do |n|
         data["shards"]["#{n}"]["url"].should == "redis://localhost:#{@first_port + n}/"
@@ -178,28 +178,38 @@ describe Herdis::Server do
         end
         
         it 'runs only the redises it owns after joining' do
-          128.times do |n|
-            Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
-            if n % 2 == 0
-              Proc.new do
-                Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
-              end.should raise_error(Errno::ECONNREFUSED)
-            else
-              Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
+          assert_true_within(20) do
+            ok = true
+            128.times do |n|
+              Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
+              if n % 2 == 0
+                begin
+                  Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
+                  ok = false
+                rescue Errno::ECONNREFUSED => e
+                end
+              else
+                begin
+                  Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"                  
+                rescue Errno::ECONNREFUSED => e
+                  ok = false
+                end
+              end
             end
+            ok
           end
         end
         
         it 'gets included in the cluster state' do
-          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
+          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
           state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
           state1["shepherds"].should == state2["shepherds"]
         end
         
         it 'gets the clusters existing shards' do
-          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
+          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
+          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
           128.times do |n|
             state1["shards"][n.to_s]["url"].should == "redis://localhost:#{@first_port1 + n}/"
           end
@@ -258,8 +268,7 @@ describe Herdis::Server do
         end
         
         it 'shuts down its non-owned master shards when they are broadcast from their owner' do
-          proper_redises_running = nil
-          100.times do
+          assert_true_within(20) do
             proper_redises_running = true
             128.times do |n|
               if n % 2 == 0
@@ -272,7 +281,6 @@ describe Herdis::Server do
                   Redis.new(:host => "localhost", :port => @first_port2 + n).ping
                   proper_redises_running = false
                 rescue Errno::ECONNREFUSED => e
-                  proper_redises_running &= true
                 end
               else
                 begin
@@ -284,53 +292,39 @@ describe Herdis::Server do
                   Redis.new(:host => "localhost", :port => @first_port1 + n).ping
                   proper_redises_running = false
                 rescue Errno::ECONNREFUSED => e
-                  proper_redises_running &= true
                 end
               end
             end
-            break if proper_redises_running
-            EM::Synchrony.sleep 0.5
+            proper_redises_running
           end
-          proper_redises_running.should == true
         end
 
         it 'makes its slave shards masters when the master shards disappear' do
-          proper_ownership = nil
-          data = nil
-          begin
-            100.times do
-              data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/").get.response)
-              proper_ownership = true
-              128.times do |n|
-                if n % 2 == 0
-                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
-                else
-                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
-                end
+          assert_true_within(20) do
+            proper_ownership = true
+            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
+            128.times do |n|
+              if n % 2 == 0
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+              else
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
               end
-              break if proper_ownership
-              EM::Synchrony.sleep 0.5
             end
             pp data unless proper_ownership
-            proper_ownership.should == true
-            100.times do
-              data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/").get.response)
-              proper_ownership = true
-              128.times do |n|
-                if n % 2 == 0
-                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
-                else
-                  proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
-                end
+            proper_ownership
+          end
+          assert_true_within(20) do
+            proper_ownership = true
+            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
+            128.times do |n|
+              if n % 2 == 0
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+              else
+                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
               end
-              break if proper_ownership
-              EM::Synchrony.sleep 0.5
             end
             pp data unless proper_ownership
-            proper_ownership.should == true
-          rescue Exception => e
-            pp data
-            raise e
+            proper_ownership
           end
         end
 
@@ -341,6 +335,72 @@ describe Herdis::Server do
   end
 
   context 'when the cluster crashes' do
+    
+    before :all do
+      if false
+      @dir1 = Dir.mktmpdir
+      @pidfile1 = Tempfile.new("pid")
+      @first_port1 = 13000
+      @http_port1 = 14000
+      @shepherd_id1 = "id1"
+      start_server(@http_port1, 
+                   @pidfile1.path, 
+                   :check_slave_timer => 0.5,
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir1, 
+                   :first_port => @first_port1, 
+                   :shepherd_id => @shepherd_id1)
+      wait_for_server(@http_port1)
+      @dir2 = Dir.mktmpdir
+      @pidfile2 = Tempfile.new("pid")
+      @first_port2 = 15000
+      @http_port2 = 16000
+      @shepherd_id2 = "id2"
+      start_server(@http_port2, 
+                   @pidfile2.path, 
+                   :check_slave_timer => 0.5,
+                   :connect_to => "http://localhost:#{@http_port1}",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir2, 
+                   :first_port => @first_port2, 
+                   :shepherd_id => @shepherd_id2)
+      wait_for_server(@http_port2)
+      @dir3 = Dir.mktmpdir
+      @pidfile3 = Tempfile.new("pid")
+      @first_port3 = 17000
+      @http_port3 = 18000
+      @shepherd_id3 = "id3"
+      start_server(@http_port3, 
+                   @pidfile3.path, 
+                   :check_slave_timer => 0.5,
+                   :connect_to => "http://localhost:#{@http_port1}",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir3, 
+                   :first_port => @first_port3, 
+                   :shepherd_id => @shepherd_id3)
+      wait_for_server(@http_port3)
+      EM.synchrony do
+        p = [@first_port1, @first_port2, @first_port3]
+        assert_true_within(20) do
+          ok = true
+          data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
+          128.times do |n|
+            port = p[n % p.size]
+            ok &= (data["shards"][n.to_s]["url"] == "redis://localhost:#{port}/")
+          end
+          ok
+        end
+      end
+      end
+    end
+    
+    after :all do
+      if false
+      stop_server(@http_port1, @pidfile1, @dir1)
+      stop_server(@http_port2, @pidfile2, @dir2)
+      stop_server(@http_port3, @pidfile3, @dir3)
+      end
+    end
     
     it 'regularly pings its predecessor and broadcasts a new cluster state if the predecessor doesnt respond'
 

@@ -7,6 +7,7 @@ module Herdis
     CHECK_PREDECESSOR_TIMER = (ENV["SHEPHERD_CHECK_PREDECESSOR_TIMER"] || 1).to_f
 
     class Shard
+
       attr_accessor :shepherd
       attr_accessor :id
       attr_accessor :slaveof
@@ -47,17 +48,38 @@ module Herdis
         shepherd.shards[id.to_s] = self
       end
       def enslave!(url)
-        @slaveof = url
-        connection.slaveof(url.host, url.port)
-        shepherd.shards.delete(id.to_s)
-        shepherd.slave_shards[id.to_s] = self
+        unless url == slaveof
+          @slaveof = url
+          connection.slaveof(url.host, url.port)
+          shepherd.shards.delete(id.to_s)
+          shepherd.slave_shards[id.to_s] = self
+        end
       end
       def initialize_redis
         begin
           connection.ping
+          if slaveof
+            connection.slaveof(slaveof.host, slaveof.port)
+          else
+            connection.slaveof("NO", "ONE")
+          end
         rescue Errno::ECONNREFUSED => e
           io = IO.popen("#{shepherd.redis} -", "w")
           write_configuration(io)
+        end
+        initialization = Proc.new do
+          begin
+            connection.set("#{self.class.name}.id", id)
+            connection.set("#{self.class.name}.created_at", Time.now.to_i)
+            connection.set("#{self.class.name}.created_by", shepherd.shepherd_id)
+          rescue Errno::ECONNREFUSED => e
+            EM.add_timer(0.1) do
+              self.call
+            end
+          end
+        end
+        EM.add_timer(0.1) do
+          initialization.call
         end
       end
       def write_configuration(io)
@@ -66,6 +88,7 @@ module Herdis
         io.puts("port #{port}")
         io.puts("timeout 300")
         if slaveof
+          @slaveof = slaveof
           io.puts("slaveof #{slaveof.host} #{slaveof.port}")
         end
         unless inmemory
@@ -117,6 +140,12 @@ module Herdis
       end
     end
 
+    def ensure_slave_check
+      @check_slave_timer ||= EM.add_periodic_timer(CHECK_SLAVE_TIMER) do
+        check_slave_shards
+      end
+    end
+
     def ensure_predecessor_check
       @check_predecessor_timer ||= EM.add_periodic_timer(CHECK_PREDECESSOR_TIMER) do
         check_predecessor
@@ -128,13 +157,11 @@ module Herdis
       resp = EM::HttpRequest.new(url).put(:body => Yajl::Encoder.encode(shepherd_status),
                                           :head => {"Content-Type" => "application/json"}).response
       merge_cluster(Yajl::Parser.parse(resp))
-      ensure_predecessor_check
     end
 
     def accept_shepherd(shepherd_status)
       new_shepherds = shepherds.rmerge(shepherd_status["id"] => shepherd_status)
       update_cluster(new_shepherds, nil)
-      ensure_predecessor_check
     end
 
     def merge_cluster(cluster_status)
@@ -169,13 +196,57 @@ module Herdis
     def cluster_info
       {
         "shepherd_id" => shepherd_id,
+        "ordinal" => ordinal,
         "slaves" => slave_shards.size,
         "masters" => shards.size,
         "redundancy" => redundancy,
         "siblings" => shepherds.keys.sort,
         "inmemory" => inmemory,
         "check_slave_timer" => CHECK_SLAVE_TIMER,
-        "check_predecessor_timer" => CHECK_PREDECESSOR_TIMER
+        "check_predecessor_timer" => CHECK_PREDECESSOR_TIMER,
+        "shards" => "#{url}/shards",
+        "sanity" => "#{url}/sanity"
+      }
+    end
+
+    def sanity
+      creators = Set.new
+      min_created_at = nil
+      max_created_at = nil
+      masters = 0
+      slaves = 0
+      consistent = true
+      shards.each do |shard_id, shard|
+        info = shard.connection.info
+        masters += 1 if info["role"] == "master"
+        slaves += 1 if info["role"] == "slave"
+        created_at = shard.connection.get("#{Herdis::Shepherd::Shard.name}.created_at").to_i
+        min_created_at = created_at if min_created_at.nil? || created_at < min_created_at
+        max_created_at = created_at if max_created_at.nil? || created_at > max_created_at
+        creators << shard.connection.get("#{Herdis::Shepherd::Shard.name}.created_by")
+        consistent &= (shard.connection.get("#{Herdis::Shepherd::Shard.name}.id") == shard_id.to_s)
+      end
+      external_shards.each do |shard_id, shard_data|
+        if shard_data["shepherd_id"] != shepherd_id
+          url = URI.parse(shard_data["url"])
+          shard_connection = Redis.new(:host => url.host, :port => url.port)
+          info = shard_connection.info
+          masters += 1 if info["role"] == "master"
+          slaves += 1 if info["role"] == "slave"
+          created_at = shard_connection.get("#{Herdis::Shepherd::Shard.name}.created_at").to_i
+          min_created_at = created_at if min_created_at.nil? || created_at < min_created_at
+          max_created_at = created_at if max_created_at.nil? || created_at > max_created_at
+          creators << shard_connection.get("#{Herdis::Shepherd::Shard.name}.created_by")
+          consistent &= (shard_connection.get("#{Herdis::Shepherd::Shard.name}.id") == shard_id.to_s)
+        end
+      end
+      {
+        :creators => creators.to_a,
+        :consistent => creators.size == 1 && masters == 128 && slaves == 0,
+        :min_created_at => Time.at(min_created_at).to_s,
+        :max_created_at => Time.at(max_created_at).to_s,
+        :masters => masters,
+        :slaves => slaves
       }
     end
 
@@ -191,15 +262,19 @@ module Herdis
       shards[shard_id.to_s].connection.shutdown
       @shards.delete(shard_id.to_s)
     end
+
+    def shutdown_slave(shard_id)
+      slave_shards[shard_id.to_s].connection.shutdown
+      @slave_shards.delete(shard_id.to_s)
+    end
     
     def shutdown
       shards.keys.each do |shard_id|
         shutdown_shard(shard_id)
       end
-      slave_shards.each do |shard_id, shard|
-        shard.connection.shutdown
+      slave_shards.keys.each do |shard_id|
+        shutdown_slave(shard_id)
       end
-      slave_shards = {}
     end
 
     def ordinal
@@ -227,35 +302,57 @@ module Herdis
     def update_shards
       should_be_owned = owned_shards
       should_be_backed_up = backup_shards
-      running = Set.new(shards.keys)
+      masters = Set.new(shards.keys)
       slaves = Set.new(slave_shards.keys)
       externally_running = Set.new(external_shards.reject do |k,v| 
                                    v["shepherd_id"] == shepherd_id 
                                  end.keys)
-      #
-      # Shards that I ought to own or backup and are running some place else but I don't have a slave or master for should get a slave.
-      #
-      (((should_be_owned + should_be_backed_up) & externally_running) - (running + slaves)).each do |shard_id|
-        create_slave_shard(shard_id)
-      end
-      #
-      # Shards that I have slaves for but nobody else is running should be liberated.
-      #
-      (slaves - externally_running).each do |shard_id|
+
+      needs_to_be_liberated = slaves - externally_running
+      needs_to_be_enslaved = (masters & externally_running & should_be_backed_up) - should_be_owned
+      needs_to_be_directed = slaves & externally_running & (should_be_backed_up | should_be_owned)
+      slaves_needing_to_be_shut_down = (slaves & externally_running) - (should_be_backed_up | should_be_owned)
+      masters_needing_to_be_shut_down = (masters & externally_running) - (should_be_backed_up | should_be_owned)
+      new_slaves_needed = ((should_be_backed_up | should_be_owned) & externally_running) - (slaves | masters)
+
+      handled = Set.new
+
+      logger.info "#{shepherd_id} liberating #{needs_to_be_liberated.inspect}" unless needs_to_be_liberated.empty?
+      needs_to_be_liberated.each do |shard_id|
+        handled.add(shard_id.to_s)
         slave_shards[shard_id.to_s].liberate!
       end
-      #
-      # Shards that both me and someone else are running, and that I shouldn't own or backup, get shutdown.
-      #
-      ((running & externally_running) - (should_be_owned + should_be_backed_up)).each do |shard_id|
+      logger.info "#{shepherd_id} enslaving #{needs_to_be_enslaved.inspect}" unless needs_to_be_enslaved.empty?
+      needs_to_be_enslaved.each do |shard_id|
+        raise "Already liberated #{shard_id}!" if handled.include?(shard_id.to_s)
+        handled.add(shard_id.to_s)
+        shards[shard_id.to_s].enslave!(URI.parse(external_shards[shard_id.to_s]["url"]))
+      end
+      needs_to_be_directed.each do |shard_id|
+        raise "Already liberated or enslaved #{shard_id}!" if handled.include?(shard_id.to_s)
+        handled.add(shard_id.to_s)
+        slave_shards[shard_id.to_s].enslave!(URI.parse(external_shards[shard_id.to_s]["url"]))
+      end
+      logger.info "#{shepherd_id} killing masters #{masters_needing_to_be_shut_down.inspect}" unless masters_needing_to_be_shut_down.empty?
+      masters_needing_to_be_shut_down.each do |shard_id|
+        raise "Already liberated, enslaved or directed #{shard_id}!" if handled.include?(shard_id.to_s)
+        handled.add(shard_id.to_s)
         shutdown_shard(shard_id)
       end
-      #
-      # Shards that both me and someone else are running, and that I should backup but not own get enslaved.
-      #
-      ((running & externally_running & should_be_backed_up) - should_be_owned).each do |shard_id|
-        shards[shard_id].enslave!(URI.parse(external_shards[shard_id]["url"]))
+      logger.info "#{shepherd_id} killing slaves #{slaves_needing_to_be_shut_down.inspect}" unless slaves_needing_to_be_shut_down.empty?
+      slaves_needing_to_be_shut_down.each do |shard_id|
+        raise "Already liberated, enslaved, directed or shut down #{shard_id}!" if handled.include?(shard_id.to_s)
+        handled.add(shard_id.to_s)
+        shutdown_slave(shard_id)
       end
+      logger.info "#{shepherd_id} creating slaves #{new_slaves_needed.inspect}" unless new_slaves_needed.empty?
+      new_slaves_needed.each do |shard_id|
+        raise "Already liberated, enslaved, directed or shut down #{shard_id}!" if handled.include?(shard_id.to_s)
+        handled.add(shard_id.to_s)
+        create_slave_shard(shard_id)
+      end
+      ensure_slave_check
+      ensure_predecessor_check
     end
 
     def broadcast(message)
@@ -341,31 +438,23 @@ module Herdis
     # Check what shards we should own that we have synced slaves for.
     #
     def check_slave_shards
-      ready_for_liberation = {}
+      slave_owners = Set.new
+      to_liberate = {}
       (owned_shards & Set.new(slave_shards.keys)).each do |shard_id|
         shard = slave_shards[shard_id.to_s]
-        if shard.connection.info["master_sync_in_progress"] == "0"
-          current_owner = external_shards[shard_id.to_s]["shepherd_id"]
-          ready_for_liberation[current_owner] ||= {}
-          ready_for_liberation[current_owner][shard_id] = shard 
+         if shard.connection.info["master_sync_in_progress"] == "0"
+          slave_owners << external_shards[shard_id.to_s]["shepherd_id"]
+          to_liberate[shard_id] = shard 
         end
       end
-      ready_for_liberation.each do |shepherd_id, shards|
-        #
-        # Create a message where we take over the slave shards owned by this shepherd.
-        #
+      unless to_liberate.empty?
         body = {
           "type" => "Cluster",
           "shepherds" => {self.shepherd_id => self.shepherd_status},
-          "shards" => shards
+          "shards" => to_liberate
         }
         Fiber.new do
-          if shepherds[shepherd_id]
-            EM::HttpRequest.new(shepherds[shepherd_id]["url"]).put(:body => Yajl::Encoder.encode(body),
-                                                                   :head => {"Content-Type" => "application/json"})
-          else
-            broadcast(body)
-          end
+          broadcast(body)
         end.resume
       end
     end
@@ -373,9 +462,6 @@ module Herdis
     def create_slave_shard(shard_id)
       u = URI.parse(external_shards[shard_id.to_s]["url"])
       slave_shards[shard_id.to_s] = create_shard(shard_id, :slaveof => u)
-      @check_slave_timer ||= EM.add_periodic_timer(CHECK_SLAVE_TIMER) do
-        check_slave_shards
-      end
     end
 
     def create_shard(shard_id, options = {})

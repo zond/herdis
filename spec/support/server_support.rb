@@ -10,7 +10,7 @@ module Support
         env_key = "SHEPHERD_#{env_key}" unless env_key.index("SHEPHERD_") == 0
         opts += " #{env_key}=#{value}"
       end
-      cmd = "env#{opts} #{File.expand_path('bin/herdis')} -p #{port} -d -P #{pidfile}"
+      cmd = "env#{opts} #{File.expand_path('bin/herdis')} -p #{port} -d -P #{pidfile} -l #{File.join(File.dirname(__FILE__), "..", "..", "logs", "#{port}.log")}"
       system(cmd)    
     end
     
@@ -28,7 +28,7 @@ module Support
     def stop_server(port, pidfile, dir)
       EM.synchrony do
         EM::HttpRequest.new("http://localhost:#{port}/").delete rescue nil
-        Process.kill("QUIT", pidfile.read.to_i) rescue nil
+        Process.kill("KILL", pidfile.read.to_i) rescue nil
         FileUtils.rm_r(dir) rescue nil
         EM.stop
       end
