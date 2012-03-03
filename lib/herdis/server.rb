@@ -18,8 +18,10 @@ require 'herdis/rack/favicon'
 require 'herdis/rack/host_parameter'
 require 'herdis/handlers/common'
 require 'herdis/handlers/shards'
+require 'herdis/handlers/cluster'
 require 'herdis/handlers/join_cluster'
-require 'herdis/handlers/update_cluster'
+require 'herdis/handlers/update_shepherd'
+require 'herdis/handlers/remove_shepherd'
 require 'herdis/handlers/shutdown'
 require 'herdis/handlers/ping'
 require 'herdis/handlers/info'
@@ -33,12 +35,14 @@ module Herdis
     use Herdis::Rack::Favicon, File.join(File.dirname(__FILE__), "..", "..", "assets", "shepherd.png")
     
     get '/shards', Herdis::Handlers::Shards
+    get '/cluster', Herdis::Handlers::Cluster
     get '/', Herdis::Handlers::Info
     get '/sanity', Herdis::Handlers::Sanity
     head '/', Herdis::Handlers::Ping
     post '/', Herdis::Handlers::JoinCluster
-    put '/', Herdis::Handlers::UpdateCluster
+    put '/*', Herdis::Handlers::UpdateShepherd
     delete '/', Herdis::Handlers::Shutdown
+    delete '/*', Herdis::Handlers::RemoveShepherd
 
   end
 

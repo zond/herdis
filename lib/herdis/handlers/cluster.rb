@@ -3,14 +3,14 @@ module Herdis
 
    module Handlers
 
-    class Shards < Goliath::API
+    class Cluster < Goliath::API
       include Common
 
       def response(env)
         if Herdis::Plugins::ShepherdConnection.shepherd.nil?
           [404, {}, ""]
         else
-          [200, {}, Herdis::Plugins::ShepherdConnection.shepherd.shard_status]
+          [200, {}, Herdis::Plugins::ShepherdConnection.shepherd.cluster_status]
         end
       end
       

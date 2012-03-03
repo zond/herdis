@@ -3,11 +3,11 @@ module Herdis
 
    module Handlers
 
-    class JoinCluster < Goliath::API
+    class RemoveShepherd < Goliath::API
       include Common
 
       def response(env)
-        Herdis::Plugins::ShepherdConnection.shepherd.join_cluster(env['params']['url'])
+        Herdis::Plugins::ShepherdConnection.shepherd.remove_shepherd(env['REQUEST_PATH'])
         [204, {}, ""]
       end
       

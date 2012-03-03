@@ -337,7 +337,6 @@ describe Herdis::Server do
   context 'when the cluster crashes' do
     
     before :all do
-      if false
       @dir1 = Dir.mktmpdir
       @pidfile1 = Tempfile.new("pid")
       @first_port1 = 13000
@@ -385,24 +384,25 @@ describe Herdis::Server do
           ok = true
           data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
           128.times do |n|
-            port = p[n % p.size]
-            ok &= (data["shards"][n.to_s]["url"] == "redis://localhost:#{port}/")
+            port = p[n % p.size] + n
+            if data["shards"][n.to_s]["url"] != "redis://localhost:#{port}/"
+              ok = false
+            end
           end
           ok
         end
       end
-      end
     end
     
     after :all do
-      if false
       stop_server(@http_port1, @pidfile1, @dir1)
       stop_server(@http_port2, @pidfile2, @dir2)
       stop_server(@http_port3, @pidfile3, @dir3)
-      end
     end
     
-    it 'regularly pings its predecessor and broadcasts a new cluster state if the predecessor doesnt respond'
+    it 'regularly pings its predecessor and broadcasts a new cluster state if the predecessor doesnt respond' do
+      puts "ok"
+    end
 
     it 'broadcasts its backup shards as master shards when the old master shards disappear'
 
