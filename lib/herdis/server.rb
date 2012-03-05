@@ -20,12 +20,15 @@ require 'herdis/handlers/common'
 require 'herdis/handlers/shards'
 require 'herdis/handlers/cluster'
 require 'herdis/handlers/join_cluster'
-require 'herdis/handlers/update_shepherd'
 require 'herdis/handlers/remove_shepherd'
 require 'herdis/handlers/shutdown'
 require 'herdis/handlers/ping'
 require 'herdis/handlers/info'
 require 'herdis/handlers/sanity'
+require 'herdis/handlers/add_shepherd'
+require 'herdis/handlers/add_shard'
+require 'herdis/handlers/remove_shepherd'
+require 'herdis/handlers/remove_shard'
 
 module Herdis
 
@@ -34,15 +37,17 @@ module Herdis
     plugin Herdis::Plugins::ShepherdConnection
     use Herdis::Rack::Favicon, File.join(File.dirname(__FILE__), "..", "..", "assets", "shepherd.png")
     
+    head '/', Herdis::Handlers::Ping
+    get '/', Herdis::Handlers::Info
     get '/shards', Herdis::Handlers::Shards
     get '/cluster', Herdis::Handlers::Cluster
-    get '/', Herdis::Handlers::Info
     get '/sanity', Herdis::Handlers::Sanity
-    head '/', Herdis::Handlers::Ping
     post '/', Herdis::Handlers::JoinCluster
-    put '/*', Herdis::Handlers::UpdateShepherd
+    put '/:shepherd_id/:shard_id', Herdis::Handlers::AddShard
+    put '/:shepherd_id', Herdis::Handlers::AddShepherd
     delete '/', Herdis::Handlers::Shutdown
-    delete '/*', Herdis::Handlers::RemoveShepherd
+    delete '/:shepherd_id/:shard_id', Herdis::Handlers::RemoveShard
+    delete '/:shepherd_id', Herdis::Handlers::RemoveShepherd
 
   end
 

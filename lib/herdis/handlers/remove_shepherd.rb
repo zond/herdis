@@ -7,7 +7,7 @@ module Herdis
       include Common
 
       def response(env)
-        Herdis::Plugins::ShepherdConnection.shepherd.remove_shepherd(env['REQUEST_PATH'])
+        Herdis::Plugins::ShepherdConnection.shepherd.remove_shepherd(env['params'][:shepherd_id])
         [204, {}, ""]
       end
       

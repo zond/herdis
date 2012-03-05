@@ -2,3 +2,4 @@
 herdis-*.gem
 bin/goliath.log*
 logs/*
+bin/dump.rdb

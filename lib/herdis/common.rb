@@ -3,7 +3,7 @@ module Herdis
 
   module Common
 
-    SHARDS = 128
+    SHARDS = 16
 
   end
 

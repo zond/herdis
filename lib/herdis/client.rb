@@ -1,6 +1,4 @@
 
-require 'em-synchrony'
-require 'em-synchrony/em-http'
 require 'hiredis'
 require 'redis'
 require 'redis/distributed'
