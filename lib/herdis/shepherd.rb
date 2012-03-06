@@ -28,7 +28,11 @@ module Herdis
         shepherd.inmemory
       end
       def connection
-        @connection ||= Redis.new(:host => "localhost", :port => port)
+        if master
+          @connection ||= Redis.new(:host => "localhost", :port => port, :password => "slaved")
+        else
+          @connection ||= Redis.new(:host => "localhost", :port => port)
+        end
       end
       def inspect
         begin
@@ -38,40 +42,39 @@ module Herdis
         end
       end
       def liberate!
-        @master = nil
-        begin
-          connection.slaveof("NO", "ONE")
-          shepherd.slaves.delete(id.to_s)
-          shepherd.masters[id.to_s] = self
-        rescue RuntimeError => e
-          if e.message == "LOADING Redis is loading the dataset in memory"
-            EM::Synchrony.sleep(0.1)
-          else
-            raise e
+        if master
+          @master = nil
+          begin
+            connection.slaveof("NO", "ONE")
+            connection.config("set", "requirepass", "")
+            shepherd.slaves.delete(id.to_s)
+            shepherd.masters[id.to_s] = self
+          rescue RuntimeError => e
+            if e.message == "LOADING Redis is loading the dataset in memory"
+              EM::Synchrony.sleep(0.1)
+            else
+              raise e
+            end
           end
         end
       end
       def enslave!(external_uri)
         unless external_uri == master
-          
+          connection.shutdown
           @master = external_uri
-          connection.slaveof(master.host, master.port)
+          @connection = nil
+          initialize_redis
           shepherd.masters.delete(id.to_s)
           shepherd.slaves[id.to_s] = self
         end
       end
       def initialize_redis
         begin
-          connection.ping
-          if master
-            connection.slaveof(master.host, master.port)
-          else
-            connection.slaveof("NO", "ONE")
-          end
+          connection.shutdown
         rescue Errno::ECONNREFUSED => e
-          io = IO.popen("#{shepherd.redis} -", "w")
-          write_configuration(io)
         end
+        io = IO.popen("#{shepherd.redis} -", "w")
+        write_configuration(io)
         unless master
           initialization = Proc.new do |p|
             begin
@@ -95,7 +98,9 @@ module Herdis
         io.puts("port #{port}")
         io.puts("timeout 300")
         if master
+          puts "#{port} is slave of #{master}"
           io.puts("slaveof #{master.host} #{master.port}")
+          io.puts("requirepass slaved")
         end
         unless inmemory
           io.puts("save 900 1")
@@ -137,6 +142,10 @@ module Herdis
       @slaves = {}
       @masters = {}
 
+      at_exit do
+        shutdown
+      end
+
       if connect_to = options.delete(:connect_to)
         join_cluster(connect_to)
       else
@@ -163,9 +172,11 @@ module Herdis
       default_options = {:head => {"Content-Type" => "application/json"}}
       multi = EM::Synchrony::Multi.new
       shepherds.each do |shepherd_id, shepherd|
-        multi.add(shepherd_id, 
-                  EM::HttpRequest.new(shepherd["url"]).send(method, 
-                                                            default_options.rmerge(options)))
+        unless shepherd_id == self.shepherd_id
+          multi.add(shepherd_id, 
+                    EM::HttpRequest.new(shepherd["url"]).send(method, 
+                                                              default_options.rmerge(options)))
+        end
       end
       yield
       Fiber.new do
@@ -201,24 +212,22 @@ module Herdis
       end
     end
 
-    def add_shard(shepherd_id, shard_id)
+    def add_shard(shepherd_id, shard_id, check = true)
       unless shepherds[shepherd_id]["masters"].include?(shard_id)
-        puts "adding #{shepherd_id}/#{shard_id}"
         shepherds[shepherd_id]["masters"] << shard_id 
         to_each_sibling(:aput,
                         :path => "/#{shepherd_id}/#{shard_id}") do
-          check_shards
+          check_shards if check
         end
       end
     end
 
-    def remove_shard(shepherd_id, shard_id)
+    def remove_shard(shepherd_id, shard_id, check = true)
       if shepherds[shepherd_id]["masters"].include?(shard_id)
-        puts "removing #{shepherd_id}/#{shard_id}"
         shepherds[shepherd_id]["masters"].delete(shard_id)
         to_each_sibling(:adelete,
                         :path => "/#{shepherd_id}/#{shard_id}") do
-          check_shards
+          check_shards if check
         end
       end
     end
@@ -264,7 +273,9 @@ module Herdis
       masters = 0
       slaves = 0
       consistent = true
+      urls = []
       shard_status.each do |shard_url|
+        urls << shard_url
         url = URI.parse(shard_url)
         shard_connection = Redis.new(:host => url.host, :port => url.port)
         info = shard_connection.info
@@ -281,7 +292,8 @@ module Herdis
         :min_created_at => Time.at(min_created_at).to_s,
         :max_created_at => Time.at(max_created_at).to_s,
         :masters => masters,
-        :slaves => slaves
+        :slaves => slaves,
+        :shards => urls
       }
     end
 
@@ -326,10 +338,6 @@ module Herdis
       end
     end
 
-    def ordinal
-      (shepherds.keys + [shepherd_id]).sort.index(shepherd_id)
-    end
-
     def create_external_shards(should_be_owned)
       shepherds.values.inject({}) do |sum, shepherd_status|
         if shepherd_status["id"] == shepherd_id
@@ -365,15 +373,16 @@ module Herdis
       needs_to_be_liberated.each do |shard_id|
         handled.add(shard_id.to_s)
         slaves[shard_id.to_s].liberate!
-        add_shard(shepherd_id, shard_id.to_s)
+        add_shard(shepherd_id, shard_id.to_s, false)
       end
       logger.info "#{shepherd_id} *** enslaving #{needs_to_be_enslaved.inspect}" unless needs_to_be_enslaved.empty?
       needs_to_be_enslaved.each do |shard_id|
         raise "Already liberated #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
         masters[shard_id.to_s].enslave!(external_shards[shard_id.to_s])
-        remove_shard(shepherd_id, shard_id.to_s)
+        remove_shard(shepherd_id, shard_id.to_s, false)
       end
+      logger.info "#{shepherd_id} *** redirecting #{needs_to_be_directed.inspect}" unless needs_to_be_directed.empty?
       needs_to_be_directed.each do |shard_id|
         raise "Already liberated or enslaved #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
@@ -384,7 +393,7 @@ module Herdis
         raise "Already liberated, enslaved or directed #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
         shutdown_shard(shard_id)
-        remove_shard(shepherd_id, shard_id.to_s)
+        remove_shard(shepherd_id, shard_id.to_s, false)
       end
       logger.info "#{shepherd_id} *** killing slaves #{slaves_needing_to_be_shut_down.inspect}" unless slaves_needing_to_be_shut_down.empty?
       slaves_needing_to_be_shut_down.each do |shard_id|
@@ -407,8 +416,7 @@ module Herdis
       (owned_shards & slaves.keys).each do |shard_id|
         shard = slaves[shard_id.to_s]
         if shard.connection.info["master_sync_in_progress"] == "0"
-          updated = true
-          shard.liberate!
+          logger.info "#{shepherd_id} *** liberating #{shard_id}"
           add_shard(shepherd_id, shard_id.to_s)
         end
       end
@@ -423,7 +431,11 @@ module Herdis
     end
 
     def ordered_shepherd_keys
-      (shepherds.keys + [shepherd_id]).sort
+      shepherds.keys.sort
+    end
+
+    def ordinal
+      shepherds.keys.sort.index(shepherd_id)
     end
 
     def backup_ordinals
@@ -469,7 +481,7 @@ module Herdis
 
     def check_predecessor
       pre = predecessor
-      if pre
+      if pre && pre["id"] != shepherd_id
         Fiber.new do
           if EM::HttpRequest.new(pre["url"]).head.response_header.status != 204
             remove_shepherd(pre["id"])

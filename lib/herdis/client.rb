@@ -2,7 +2,6 @@
 require 'hiredis'
 require 'redis'
 require 'redis/distributed'
-require 'goliath'
 require 'yajl'
 require 'digest/sha1'
 require 'pp'
@@ -18,6 +17,8 @@ module Herdis
     class DeadClusterException < RuntimeError
     end
 
+    attr_reader :options, :shepherds, :dredis
+
     def initialize(url, options = {})
       @options = options
       @shepherds = {"initial" => {"url" => url}}
@@ -29,15 +30,30 @@ module Herdis
     end
 
     def create_urls(cluster)
-      urls = {}
+      hash = {}
       cluster.each do |shepherd_id, shepherd_status|
         shepherd_url = URI.parse(shepherd_status["url"])
         (shepherd_status["masters"] || []).each do |shard_id|
-          urls[shard_id.to_i] = "redis://#{shepherd_url.host}:#{shepherd_status["first_port"].to_i + shard_id.to_i}/"
+          hash[shard_id.to_i] = "redis://#{shepherd_url.host}:#{shepherd_status["first_port"].to_i + shard_id.to_i}/"
         end
       end
-      urls.keys.sort.collect do |key|
-        urls[key]
+      urls = hash.keys.sort.collect do |key|
+        hash[key]
+      end
+    end
+
+    def validate(urls)
+      unless urls.size == Herdis::Common::SHARDS
+        raise "Broken cluster, there should be #{Herdis::Common::SHARDS} shards, but are #{urls.size}"
+      end
+      creators = Set.new
+      urls.each_with_index do |url, index|
+        parsed = URI.parse(url)
+        r = Redis.new(:host => parsed.host, :port => parsed.port)
+        claimed_shard = r.get("Herdis::Shepherd::Shard.id").to_i
+        creators << r.get("Herdis::Shepherd::Shard.created_by")
+        raise "Broken cluster, shard #{index} claims to be shard #{claimed_shard}" unless claimed_shard == index
+        raise "Broken cluster, multiple creators: #{creators.inspect}" if creators.size > 1
       end
     end
 
@@ -56,9 +72,7 @@ module Herdis
         end
       end
       urls = create_urls(cluster)
-      unless urls.size == Herdis::Common::SHARDS
-        raise "Broken cluster, there should be #{Herdis::Common::SHARDS} shards, but are #{urls.size}"
-      end
+      validate(urls)
       @shepherds = cluster
       @dredis = Redis::Distributed.new(urls,
                                        @options)
@@ -73,6 +87,13 @@ module Herdis
       rescue Errno::ECONNREFUSED => e
         refresh_cluster
         retry
+      rescue RuntimeError => e
+        if e.message == "ERR operation not permitted"
+          refresh_cluster
+          retry
+        else
+          raise e
+        end
       end
     end
 
