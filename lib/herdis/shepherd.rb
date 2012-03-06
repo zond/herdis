@@ -53,6 +53,7 @@ module Herdis
       end
       def enslave!(external_uri)
         unless external_uri == master
+          
           @master = external_uri
           connection.slaveof(master.host, master.port)
           shepherd.masters.delete(id.to_s)
@@ -251,7 +252,6 @@ module Herdis
         "inmemory" => inmemory,
         "check_slave_timer" => CHECK_SLAVE_TIMER,
         "check_predecessor_timer" => CHECK_PREDECESSOR_TIMER,
-        "shards" => "#{url}/shards",
         "sanity" => "#{url}/sanity",
         "cluster" => "#{url}/cluster"
       }

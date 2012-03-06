@@ -17,7 +17,6 @@ require 'herdis/rack/default_headers'
 require 'herdis/rack/favicon'
 require 'herdis/rack/host_parameter'
 require 'herdis/handlers/common'
-require 'herdis/handlers/shards'
 require 'herdis/handlers/cluster'
 require 'herdis/handlers/join_cluster'
 require 'herdis/handlers/remove_shepherd'
@@ -39,7 +38,6 @@ module Herdis
     
     head '/', Herdis::Handlers::Ping
     get '/', Herdis::Handlers::Info
-    get '/shards', Herdis::Handlers::Shards
     get '/cluster', Herdis::Handlers::Cluster
     get '/sanity', Herdis::Handlers::Sanity
     post '/', Herdis::Handlers::JoinCluster
