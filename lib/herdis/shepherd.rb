@@ -98,7 +98,6 @@ module Herdis
         io.puts("port #{port}")
         io.puts("timeout 300")
         if master
-          puts "#{port} is slave of #{master}"
           io.puts("slaveof #{master.host} #{master.port}")
           io.puts("requirepass slaved")
         end
@@ -304,7 +303,7 @@ module Herdis
           if rval[shard_id.to_i].nil?
             rval[shard_id.to_i] = "redis://#{host}:#{shard_id.to_i + shepherd_status["first_port"].to_i}/"
           else
-            raise Goliath::Validations::InternalServerError.new("Duplicate masters: #{shard_id}")
+            raise Goliath::Validation::InternalServerError.new("Duplicate masters: #{shard_id}")
           end
         end
       end

@@ -33,6 +33,92 @@ module Support
         EM.stop
       end
     end
+
+    def redis_slave_of?(slaveport, masterport)
+      ok = true
+      begin
+        info = Redis.new(:host => "localhost", :port => slaveport, :password => "slaved").info
+        ok &= (info["role"] == "slave")
+        ok &= (info["master_host"] == "localhost")
+        ok &= (info["master_port"].to_i == masterport)
+      rescue Errno::ECONNREFUSED => e
+        ok = false
+      rescue RuntimeError => e
+        if e.message == "ERR operation not permitted"
+          ok = false
+        elsif e.message == "ERR Client sent AUTH, but no password is set"
+          ok = false
+        else
+          raise e
+        end
+      end
+      ok
+    end
+
+    def redis_dead?(port)
+      begin
+        Redis.new(:host => "127.0.0.1", :port => port).ping
+        return false
+      rescue Errno::ECONNREFUSED => e
+        return true
+      end
+    end
+
+    def redis_alive?(port)
+      ok = true
+      begin
+        ok &= (Redis.new(:host => "127.0.0.1", :port => port).ping == "PONG")
+      rescue Errno::ECONNREFUSED => e
+        ok = false
+      rescue RuntimeError => e
+        if e.message == "ERR operation not permitted"
+          ok = false
+        else
+          raise e
+        end
+      end
+      ok
+    end
+    
+    def redis_master?(masterport)
+      ok = true
+      begin
+        ok &= (Redis.new(:host => "localhost", :port => masterport).info["role"] == "master")
+      rescue Errno::ECONNREFUSED => e
+        ok = false
+      rescue RuntimeError => e
+        if e.message == "ERR operation not permitted"
+          ok = false
+        else
+          raise e
+        end
+      end
+      ok
+    end
+
+    def stable_cluster?(http_port, *shepherd_ids)
+      ok = true
+      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{http_port}/cluster").get.response)
+      Herdis::Common::SHARDS.times do |n|
+        correct_shepherd_id = shepherd_ids[n % shepherd_ids.size]
+        data.each do |shepherd_id, shepherd_stat|
+          if shepherd_id == correct_shepherd_id
+            ok &= data[shepherd_id]["masters"].include?(n.to_s)
+          else
+            ok &= !data[shepherd_id]["masters"].include?(n.to_s)
+          end
+        end
+      end
+      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{http_port}/sanity").get.response)
+      ok &= data["consistent"]
+      ok
+    end
+
+    def assert_stable_cluster(http_port, *shepherd_ids)
+      assert_true_within(20) do
+        stable_cluster?(http_port, *shepherd_ids)
+      end
+    end
     
     def assert_true_within(timeout, &block)
       deadline = Time.now.to_f + timeout

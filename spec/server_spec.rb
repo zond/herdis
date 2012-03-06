@@ -103,57 +103,11 @@ describe Herdis::Server do
           proper_redises_running = true
           Herdis::Common::SHARDS.times do |n|
             if n % 2 == 0
-              begin
-                proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).info["role"] == "master")
-              rescue Errno::ECONNREFUSED => e
-                proper_redises_running = false
-              rescue RuntimeError => e
-                if e.message == "ERR operation not permitted"
-                  proper_redises_running &= false
-                else
-                  raise e
-                end
-              end
-              begin
-                info = Redis.new(:host => "localhost", :port => @first_port2 + n, :password => "slaved").info
-                proper_redises_running &= (info["role"] == "slave")
-                proper_redises_running &= (info["master_host"] == "localhost")
-                proper_redises_running &= (info["master_port"].to_i == @first_port1 + n)
-              rescue Errno::ECONNREFUSED => e
-                proper_redises_running &= false
-              rescue RuntimeError => e
-                if e.message == "ERR operation not permitted"
-                  proper_redises_running &= false
-                else
-                  raise e
-                end
-              end
+              proper_redises_running &= redis_master?(@first_port1 + n)
+              proper_redises_running &= redis_slave_of?(@first_port2 + n, @first_port1 + n)
             else
-              begin
-                proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port2 + n).info["role"] == "master")
-              rescue Errno::ECONNREFUSED => e
-                proper_redises_running = false
-              rescue RuntimeError => e
-                if e.message == "ERR operation not permitted"
-                  proper_redises_running &= false
-                else
-                  raise e
-                end
-              end
-              begin
-                info = Redis.new(:host => "localhost", :port => @first_port1 + n, :password => "slaved").info
-                proper_redises_running &= (info["role"] == "slave")
-                proper_redises_running &= (info["master_host"] == "localhost")
-                proper_redises_running &= (info["master_port"].to_i == @first_port2 + n)
-              rescue Errno::ECONNREFUSED => e
-                proper_redises_running &= false
-              rescue RuntimeError => e
-                if e.message == "ERR operation not permitted"
-                  proper_redises_running &= false
-                else
-                  raise e
-                end
-              end
+              proper_redises_running &= redis_master?(@first_port2 + n)
+              proper_redises_running &= redis_slave_of?(@first_port1 + n, @first_port2 + n)
             end
           end
           proper_redises_running
@@ -205,25 +159,11 @@ describe Herdis::Server do
           assert_true_within(20) do
             ok = true
             Herdis::Common::SHARDS.times do |n|
-              Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
+              ok &= redis_alive?(@first_port1 + n)
               if n % 2 == 0
-                begin
-                  Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"
-                  ok = false
-                rescue Errno::ECONNREFUSED => e
-                end
+                ok &= redis_dead?(@first_port2 + n)
               else
-                begin
-                  Redis.new(:host => "127.0.0.1", :port => @first_port2 + n, :password => "slaved").ping.should == "PONG"                  
-                rescue Errno::ECONNREFUSED => e
-                  ok = false
-                rescue RuntimeError => e
-                  if e.message == "ERR operation not permitted"
-                    ok = false
-                  else
-                    raise e
-                  end
-                end
+                ok &= redis_slave_of?(@first_port2 + n, @first_port1 + n)
               end
             end
             ok
@@ -249,11 +189,7 @@ describe Herdis::Server do
         it 'starts slave shards for all shards in the cluster it should own' do
           Herdis::Common::SHARDS.times do |n|
             if n % 2 == 1
-              r = Redis.new(:host => "localhost", :port => @first_port2 + n, :password => "slaved")
-              info = r.info
-              info["role"].should == "slave"
-              info["master_host"].should == "localhost"
-              info["master_port"].to_i.should == @first_port1 + n
+              redis_slave_of?(@first_port2 + n, @first_port1 + n).should == true
             end
           end
         end
@@ -302,39 +238,11 @@ describe Herdis::Server do
             proper_redises_running = true
             Herdis::Common::SHARDS.times do |n|
               if n % 2 == 0
-                begin
-                  proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG")
-                rescue Errno::ECONNREFUSED => e
-                  proper_redises_running = false
-                rescue RuntimeError => e
-                  if e.message == "ERR operation not permitted"
-                    proper_redises_running = false
-                  else
-                    raise e
-                  end
-                end
-                begin
-                  Redis.new(:host => "localhost", :port => @first_port2 + n).ping
-                  proper_redises_running = false
-                rescue Errno::ECONNREFUSED => e
-                end
+                proper_redises_running &= redis_alive?(@first_port1 + n)
+                proper_redises_running &= redis_dead?(@first_port2 + n)
               else
-                begin
-                  proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG")
-                rescue Errno::ECONNREFUSED => e
-                  proper_redises_running = false
-                rescue RuntimeError => e
-                  if e.message == "ERR operation not permitted"
-                    proper_redises_running = false
-                  else
-                    raise e
-                  end
-                end
-                begin
-                  Redis.new(:host => "localhost", :port => @first_port1 + n).ping
-                  proper_redises_running = false
-                rescue Errno::ECONNREFUSED => e
-                end
+                proper_redises_running &= redis_dead?(@first_port1 + n)
+                proper_redises_running &= redis_alive?(@first_port2 + n)
               end
             end
             proper_redises_running
@@ -342,34 +250,8 @@ describe Herdis::Server do
         end
 
         it 'makes its slave shards masters when the master shards disappear' do
-          assert_true_within(20) do
-            proper_ownership = true
-            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/cluster").get.response)
-            Herdis::Common::SHARDS.times do |n|
-              if n % 2 == 0
-                proper_ownership &= data[@shepherd_id1]["masters"].include?(n.to_s)
-                proper_ownership &= !data[@shepherd_id2]["masters"].include?(n.to_s)
-              else
-                proper_ownership &= data[@shepherd_id2]["masters"].include?(n.to_s)
-                proper_ownership &= !data[@shepherd_id1]["masters"].include?(n.to_s)
-              end
-            end
-            proper_ownership
-          end
-          assert_true_within(20) do
-            proper_ownership = true
-            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/cluster").get.response)
-            Herdis::Common::SHARDS.times do |n|
-              if n % 2 == 0
-                proper_ownership &= data[@shepherd_id1]["masters"].include?(n.to_s)
-                proper_ownership &= !data[@shepherd_id2]["masters"].include?(n.to_s)
-              else
-                proper_ownership &= data[@shepherd_id2]["masters"].include?(n.to_s)
-                proper_ownership &= !data[@shepherd_id1]["masters"].include?(n.to_s)
-              end
-            end
-            proper_ownership
-          end
+          assert_stable_cluster(@http_port1, @shepherd_id1, @shepherd_id2)
+          assert_stable_cluster(@http_port2, @shepherd_id1, @shepherd_id2)
         end
 
       end
@@ -423,33 +305,24 @@ describe Herdis::Server do
                    :shepherd_id => @shepherd_id3)
       wait_for_server(@http_port3)
       EM.synchrony do
-        p = [@first_port1, @first_port2, @first_port3]
-        assert_true_within(20) do
-          ok = true
-          data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
-          Herdis::Common::SHARDS.times do |n|
-            port = p[n % p.size] + n
-            if data["shards"][n.to_s]["url"] != "redis://localhost:#{port}/"
-              ok = false
-            end
-          end
-          ok
-        end
+        assert_stable_cluster(@http_port1, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        assert_stable_cluster(@http_port2, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        assert_stable_cluster(@http_port3, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        EM.stop
       end
+      stop_server(@http_port3, @pidfile3, @dir3)
     end
     
     after :all do
       stop_server(@http_port1, @pidfile1, @dir1)
       stop_server(@http_port2, @pidfile2, @dir2)
-      stop_server(@http_port3, @pidfile3, @dir3)
     end
     
     it 'regularly pings its predecessor and broadcasts a new cluster state if the predecessor doesnt respond' do
-      puts "ok"
+      assert_stable_cluster(@http_port1, @shepherd_id1, @shepherd_id2)
+      assert_stable_cluster(@http_port2, @shepherd_id1, @shepherd_id2)
     end
-
-    it 'broadcasts its backup shards as master shards when the old master shards disappear'
-
+    
   end
 
 end
