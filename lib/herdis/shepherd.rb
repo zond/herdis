@@ -212,21 +212,42 @@ module Herdis
     end
 
     def add_shard(shepherd_id, shard_id, check = true)
-      unless shepherds[shepherd_id]["masters"].include?(shard_id)
-        shepherds[shepherd_id]["masters"] << shard_id 
-        to_each_sibling(:aput,
-                        :path => "/#{shepherd_id}/#{shard_id}") do
-          check_shards if check
+      if shepherd_state = shepherds[shepherd_id]
+        unless shepherd_state["masters"].include?(shard_id)
+          shepherd_state["masters"] << shard_id 
+          to_each_sibling(:aput,
+                          :path => "/#{shepherd_id}/#{shard_id}") do
+            check_shards if check
+          end
         end
       end
     end
 
+    def add_shards(shard_ids)
+      shepherds[shepherd_id]["masters"] += shard_ids.to_a
+      multi = EM::Synchrony::Multi.new
+      shepherds.each do |shepherd_id, shepherd|
+        unless shepherd_id == self.shepherd_id
+          shard_ids.each do |shard_id|
+            multi.add(shepherd_id, 
+                      EM::HttpRequest.new(shepherd["url"]).aput(:path => "/#{self.shepherd_id}/#{shard_id}",
+                                                                :head => {"Content-Type" => "application/json"}))
+          end
+        end
+      end
+      Fiber.new do
+        multi.perform while !multi.finished?
+      end.resume
+    end
+
     def remove_shard(shepherd_id, shard_id, check = true)
-      if shepherds[shepherd_id]["masters"].include?(shard_id)
-        shepherds[shepherd_id]["masters"].delete(shard_id)
-        to_each_sibling(:adelete,
-                        :path => "/#{shepherd_id}/#{shard_id}") do
-          check_shards if check
+      if shepherd_state = shepherds[shepherd_id]
+        if shepherd_state["masters"].include?(shard_id)
+          shepherd_state["masters"].delete(shard_id)
+          to_each_sibling(:adelete,
+                          :path => "/#{shepherd_id}/#{shard_id}") do
+            check_shards if check
+          end
         end
       end
     end
@@ -368,39 +389,39 @@ module Herdis
 
       handled = Set.new
 
-      logger.info "#{shepherd_id} *** liberating #{needs_to_be_liberated.inspect}" unless needs_to_be_liberated.empty?
+      logger.debug "#{shepherd_id} *** liberating #{needs_to_be_liberated.inspect}" unless needs_to_be_liberated.empty?
       needs_to_be_liberated.each do |shard_id|
         handled.add(shard_id.to_s)
         slaves[shard_id.to_s].liberate!
         add_shard(shepherd_id, shard_id.to_s, false)
       end
-      logger.info "#{shepherd_id} *** enslaving #{needs_to_be_enslaved.inspect}" unless needs_to_be_enslaved.empty?
+      logger.debug "#{shepherd_id} *** enslaving #{needs_to_be_enslaved.inspect}" unless needs_to_be_enslaved.empty?
       needs_to_be_enslaved.each do |shard_id|
         raise "Already liberated #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
         masters[shard_id.to_s].enslave!(external_shards[shard_id.to_s])
         remove_shard(shepherd_id, shard_id.to_s, false)
       end
-      logger.info "#{shepherd_id} *** redirecting #{needs_to_be_directed.inspect}" unless needs_to_be_directed.empty?
+      logger.debug "#{shepherd_id} *** redirecting #{needs_to_be_directed.inspect}" unless needs_to_be_directed.empty?
       needs_to_be_directed.each do |shard_id|
         raise "Already liberated or enslaved #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
         slaves[shard_id.to_s].enslave!(external_shards[shard_id.to_s])
       end
-      logger.info "#{shepherd_id} *** killing masters #{masters_needing_to_be_shut_down.inspect}" unless masters_needing_to_be_shut_down.empty?
+      logger.debug "#{shepherd_id} *** killing masters #{masters_needing_to_be_shut_down.inspect}" unless masters_needing_to_be_shut_down.empty?
       masters_needing_to_be_shut_down.each do |shard_id|
         raise "Already liberated, enslaved or directed #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
         shutdown_shard(shard_id)
         remove_shard(shepherd_id, shard_id.to_s, false)
       end
-      logger.info "#{shepherd_id} *** killing slaves #{slaves_needing_to_be_shut_down.inspect}" unless slaves_needing_to_be_shut_down.empty?
+      logger.debug "#{shepherd_id} *** killing slaves #{slaves_needing_to_be_shut_down.inspect}" unless slaves_needing_to_be_shut_down.empty?
       slaves_needing_to_be_shut_down.each do |shard_id|
         raise "Already liberated, enslaved, directed or shut down #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
         shutdown_slave(shard_id)
       end
-      logger.info "#{shepherd_id} *** creating slaves #{new_slaves_needed.inspect}" unless new_slaves_needed.empty?
+      logger.debug "#{shepherd_id} *** creating slaves #{new_slaves_needed.inspect}" unless new_slaves_needed.empty?
       new_slaves_needed.each do |shard_id|
         raise "Already liberated, enslaved, directed or shut down #{shard_id}!" if handled.include?(shard_id.to_s)
         handled.add(shard_id.to_s)
@@ -412,12 +433,16 @@ module Herdis
     end
     
     def check_slaves
+      revolution = Set.new
       (owned_shards & slaves.keys).each do |shard_id|
         shard = slaves[shard_id.to_s]
         if shard.connection.info["master_sync_in_progress"] == "0"
-          logger.info "#{shepherd_id} *** liberating #{shard_id}"
-          add_shard(shepherd_id, shard_id.to_s)
+          revolution << shard_id.to_s
         end
+      end
+      unless revolution.empty?
+        logger.debug "#{shepherd_id} *** revolting #{revolution}"
+        add_shards(revolution)
       end
     end
 
@@ -483,6 +508,7 @@ module Herdis
       if pre && pre["id"] != shepherd_id
         Fiber.new do
           if EM::HttpRequest.new(pre["url"]).head.response_header.status != 204
+            logger.warn("#{shepherd_id} *** dropping #{pre["id"]} due to failure to respond to ping")
             remove_shepherd(pre["id"])
           end
         end.resume
