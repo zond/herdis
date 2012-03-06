@@ -21,14 +21,14 @@ describe Herdis::Shepherd do
         FileUtils.rm_r(@dir)
       end
       
-      it 'starts 128 redises at the provided port' do
-        128.times do |n|
+      it "starts #{Herdis::Common::SHARDS} redises at the provided port" do
+        Herdis::Common::SHARDS.times do |n|
           Redis.new(:host => "127.0.0.1", :port => @first_port + n).ping.should == "PONG"
         end
       end
       
-      it 'starts 128 redises in the provided directory' do
-        128.times do |n|
+      it 'starts #{Herdis::Common::SHARDS} redises in the provided directory' do
+        Herdis::Common::SHARDS.times do |n|
           File.exists?(File.join(@dir, "shard#{n}", "pid")).should == true
         end
       end
@@ -39,7 +39,7 @@ describe Herdis::Shepherd do
       
       it 'shuts down all its redises on #shutdown' do
         @shepherd.shutdown
-        128.times do |n|
+        Herdis::Common::SHARDS.times do |n|
           Proc.new do
             Redis.new(:host => "127.0.0.1", :port => @first_port + n).ping
           end.should raise_error
