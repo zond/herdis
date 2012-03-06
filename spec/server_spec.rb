@@ -306,6 +306,12 @@ describe Herdis::Server do
                   proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG")
                 rescue Errno::ECONNREFUSED => e
                   proper_redises_running = false
+                rescue RuntimeError => e
+                  if e.message == "ERR operation not permitted"
+                    proper_redises_running = false
+                  else
+                    raise e
+                  end
                 end
                 begin
                   Redis.new(:host => "localhost", :port => @first_port2 + n).ping
@@ -317,6 +323,12 @@ describe Herdis::Server do
                   proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port2 + n).ping == "PONG")
                 rescue Errno::ECONNREFUSED => e
                   proper_redises_running = false
+                rescue RuntimeError => e
+                  if e.message == "ERR operation not permitted"
+                    proper_redises_running = false
+                  else
+                    raise e
+                  end
                 end
                 begin
                   Redis.new(:host => "localhost", :port => @first_port1 + n).ping
@@ -332,28 +344,30 @@ describe Herdis::Server do
         it 'makes its slave shards masters when the master shards disappear' do
           assert_true_within(20) do
             proper_ownership = true
-            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
+            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/cluster").get.response)
             Herdis::Common::SHARDS.times do |n|
               if n % 2 == 0
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+                proper_ownership &= data[@shepherd_id1]["masters"].include?(n.to_s)
+                proper_ownership &= !data[@shepherd_id2]["masters"].include?(n.to_s)
               else
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+                proper_ownership &= data[@shepherd_id2]["masters"].include?(n.to_s)
+                proper_ownership &= !data[@shepherd_id1]["masters"].include?(n.to_s)
               end
             end
-            pp data unless proper_ownership
             proper_ownership
           end
           assert_true_within(20) do
             proper_ownership = true
-            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
+            data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/cluster").get.response)
             Herdis::Common::SHARDS.times do |n|
               if n % 2 == 0
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
+                proper_ownership &= data[@shepherd_id1]["masters"].include?(n.to_s)
+                proper_ownership &= !data[@shepherd_id2]["masters"].include?(n.to_s)
               else
-                proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port2 + n}/"
+                proper_ownership &= data[@shepherd_id2]["masters"].include?(n.to_s)
+                proper_ownership &= !data[@shepherd_id1]["masters"].include?(n.to_s)
               end
             end
-            pp data unless proper_ownership
             proper_ownership
           end
         end
