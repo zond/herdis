@@ -214,9 +214,15 @@ describe Herdis::Server do
                 end
               else
                 begin
-                  Redis.new(:host => "127.0.0.1", :port => @first_port2 + n).ping.should == "PONG"                  
+                  Redis.new(:host => "127.0.0.1", :port => @first_port2 + n, :password => "slaved").ping.should == "PONG"                  
                 rescue Errno::ECONNREFUSED => e
                   ok = false
+                rescue RuntimeError => e
+                  if e.message == "ERR operation not permitted"
+                    ok = false
+                  else
+                    raise e
+                  end
                 end
               end
             end
@@ -225,25 +231,25 @@ describe Herdis::Server do
         end
         
         it 'gets included in the cluster state' do
-          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
-          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
-          state1["shepherds"].keys.sort.should == ["id1", "id2"].sort
-          state1["shepherds"].should == state2["shepherds"]
+          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/cluster").get.response)
+          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/cluster").get.response)
+          state1.keys.sort.should == ["id1", "id2"].sort
+          state1.should == state2
         end
         
         it 'gets the clusters existing shards' do
-          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
-          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
+          state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/cluster").get.response)
+          state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/cluster").get.response)
           Herdis::Common::SHARDS.times do |n|
-            state1["shards"][n.to_s]["url"].should == "redis://localhost:#{@first_port1 + n}/"
+            state1[@shepherd_id1]["masters"].include?(n.to_s).should == true
           end
-          state1["shards"].should == state2["shards"]
+          state1.should == state2
         end
         
         it 'starts slave shards for all shards in the cluster it should own' do
           Herdis::Common::SHARDS.times do |n|
             if n % 2 == 1
-              r = Redis.new(:host => "localhost", :port => @first_port2 + n)
+              r = Redis.new(:host => "localhost", :port => @first_port2 + n, :password => "slaved")
               info = r.info
               info["role"].should == "slave"
               info["master_host"].should == "localhost"
