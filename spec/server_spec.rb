@@ -23,34 +23,34 @@ describe Herdis::Server do
       stop_server(@http_port, @pidfile, @dir)
     end
     
-    it 'starts 128 redises at the provided port' do
-      128.times do |n|
+    it "starts #{Herdis::Common::SHARDS} redises at the provided port" do
+      Herdis::Common::SHARDS.times do |n|
         Redis.new(:host => "127.0.0.1", :port => @first_port + n).ping.should == "PONG"
       end
     end
     
-    it 'starts 128 redises in the provided directory' do
-      128.times do |n|
+    it "starts #{Herdis::Common::SHARDS} redises in the provided directory" do
+      Herdis::Common::SHARDS.times do |n|
         File.exists?(File.join(@dir, "shard#{n}", "pid")).should == true
       end
     end
     
     it 'has the provided shepherd_id on GET' do
-      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/shards").get.response)
-      data["shepherds"].to_a[0][0].should == @shepherd_id
+      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/cluster").get.response)
+      data.to_a[0][0].should == @shepherd_id
     end
 
-    it 'broadcasts 128 shards on the given ports on GET' do
-      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/shards").get.response)
-      data["shards"].size.should == 128
-      128.times do |n|
-        data["shards"]["#{n}"]["url"].should == "redis://localhost:#{@first_port + n}/"
+    it "broadcasts #{Herdis::Common::SHARDS} shards on the given ports on GET" do
+      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port}/cluster").get.response)
+      data[@shepherd_id]["masters"].size.should == Herdis::Common::SHARDS
+      Herdis::Common::SHARDS.times do |n|
+        data[@shepherd_id]["masters"].include?("#{n}").should == true
       end
     end
     
     it 'shuts down all its redises on DELETE' do
       EM::HttpRequest.new("http://localhost:#{@http_port}/").delete
-      128.times do |n|
+      Herdis::Common::SHARDS.times do |n|
         Proc.new do
           Redis.new(:host => "127.0.0.1", :port => @first_port + n).ping
         end.should raise_error
@@ -101,34 +101,58 @@ describe Herdis::Server do
       it 'backs up 1 predecessor using slave shards' do
         assert_true_within(20) do
           proper_redises_running = true
-          128.times do |n|
+          Herdis::Common::SHARDS.times do |n|
             if n % 2 == 0
               begin
                 proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).info["role"] == "master")
               rescue Errno::ECONNREFUSED => e
                 proper_redises_running = false
+              rescue RuntimeError => e
+                if e.message == "ERR operation not permitted"
+                  proper_redises_running &= false
+                else
+                  raise e
+                end
               end
               begin
-                info = Redis.new(:host => "localhost", :port => @first_port2 + n).info
+                info = Redis.new(:host => "localhost", :port => @first_port2 + n, :password => "slaved").info
                 proper_redises_running &= (info["role"] == "slave")
                 proper_redises_running &= (info["master_host"] == "localhost")
                 proper_redises_running &= (info["master_port"].to_i == @first_port1 + n)
               rescue Errno::ECONNREFUSED => e
                 proper_redises_running &= false
+              rescue RuntimeError => e
+                if e.message == "ERR operation not permitted"
+                  proper_redises_running &= false
+                else
+                  raise e
+                end
               end
             else
               begin
                 proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port2 + n).info["role"] == "master")
               rescue Errno::ECONNREFUSED => e
                 proper_redises_running = false
+              rescue RuntimeError => e
+                if e.message == "ERR operation not permitted"
+                  proper_redises_running &= false
+                else
+                  raise e
+                end
               end
               begin
-                info = Redis.new(:host => "localhost", :port => @first_port1 + n).info
+                info = Redis.new(:host => "localhost", :port => @first_port1 + n, :password => "slaved").info
                 proper_redises_running &= (info["role"] == "slave")
                 proper_redises_running &= (info["master_host"] == "localhost")
                 proper_redises_running &= (info["master_port"].to_i == @first_port2 + n)
               rescue Errno::ECONNREFUSED => e
                 proper_redises_running &= false
+              rescue RuntimeError => e
+                if e.message == "ERR operation not permitted"
+                  proper_redises_running &= false
+                else
+                  raise e
+                end
               end
             end
           end
@@ -180,7 +204,7 @@ describe Herdis::Server do
         it 'runs only the redises it owns after joining' do
           assert_true_within(20) do
             ok = true
-            128.times do |n|
+            Herdis::Common::SHARDS.times do |n|
               Redis.new(:host => "127.0.0.1", :port => @first_port1 + n).ping.should == "PONG"
               if n % 2 == 0
                 begin
@@ -210,14 +234,14 @@ describe Herdis::Server do
         it 'gets the clusters existing shards' do
           state1 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
           state2 = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
-          128.times do |n|
+          Herdis::Common::SHARDS.times do |n|
             state1["shards"][n.to_s]["url"].should == "redis://localhost:#{@first_port1 + n}/"
           end
           state1["shards"].should == state2["shards"]
         end
         
         it 'starts slave shards for all shards in the cluster it should own' do
-          128.times do |n|
+          Herdis::Common::SHARDS.times do |n|
             if n % 2 == 1
               r = Redis.new(:host => "localhost", :port => @first_port2 + n)
               info = r.info
@@ -270,7 +294,7 @@ describe Herdis::Server do
         it 'shuts down its non-owned master shards when they are broadcast from their owner' do
           assert_true_within(20) do
             proper_redises_running = true
-            128.times do |n|
+            Herdis::Common::SHARDS.times do |n|
               if n % 2 == 0
                 begin
                   proper_redises_running &= (Redis.new(:host => "localhost", :port => @first_port1 + n).ping == "PONG")
@@ -303,7 +327,7 @@ describe Herdis::Server do
           assert_true_within(20) do
             proper_ownership = true
             data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
-            128.times do |n|
+            Herdis::Common::SHARDS.times do |n|
               if n % 2 == 0
                 proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
               else
@@ -316,7 +340,7 @@ describe Herdis::Server do
           assert_true_within(20) do
             proper_ownership = true
             data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port2}/shards").get.response)
-            128.times do |n|
+            Herdis::Common::SHARDS.times do |n|
               if n % 2 == 0
                 proper_ownership &= data["shards"][n.to_s]["url"] == "redis://localhost:#{@first_port1 + n}/"
               else
@@ -383,7 +407,7 @@ describe Herdis::Server do
         assert_true_within(20) do
           ok = true
           data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{@http_port1}/shards").get.response)
-          128.times do |n|
+          Herdis::Common::SHARDS.times do |n|
             port = p[n % p.size] + n
             if data["shards"][n.to_s]["url"] != "redis://localhost:#{port}/"
               ok = false
