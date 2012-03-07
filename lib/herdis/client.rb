@@ -13,7 +13,7 @@ require 'herdis/common'
 module Herdis
   
   class Client
-    
+
     class DeadClusterException < RuntimeError
     end
 
