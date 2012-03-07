@@ -7,11 +7,13 @@ require 'rspec'
 require 'goliath'
 require 'goliath/test_helper'
 require 'herdis/server'
+require 'herdis/client'
 require 'fileutils'
 
 $LOAD_PATH.unshift dir
 
 require 'support/server_support'
+require 'support/event_machine_helpers'
 
 Goliath.env = :test
 
@@ -24,6 +26,7 @@ RSpec.configure do |c|
   end
   c.include Support::ServerSupport
   c.include Goliath::TestHelper
+  c.extend EventMachineHelpers
 end
 
 module Goliath

@@ -70,7 +70,15 @@ module Herdis
       end
       def initialize_redis
         begin
-          connection.shutdown
+          begin
+            connection.shutdown          
+          rescue RuntimeError => e
+            if e.message == "ERR Client sent AUTH, but no password is set"
+              Redis.new(:host => "localhost", :port => port).shutdown
+            else
+              raise e
+            end
+          end
         rescue Errno::ECONNREFUSED => e
         end
         io = IO.popen("#{shepherd.redis} -", "w")

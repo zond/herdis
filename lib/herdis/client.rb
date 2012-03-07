@@ -14,6 +14,27 @@ module Herdis
   
   class Client
 
+    class ReDistributed < Redis::Distributed
+      
+      attr_reader :nodes
+
+      def initialize(urls, options = {})
+        @tag = options.delete(:tag) || /^\{(.+?)\}/
+        @default_options = options
+        @nodes = urls.map { |url| Redis.connect(options.merge(:url => url)) }
+        @subscribed_node = nil
+      end
+
+      def node_for(key)
+        @nodes[Digest::SHA1.hexdigest(key_tag(key.to_s) || key.to_s).to_i(16) % @nodes.size]
+      end
+      
+      def add_node(url)
+        raise "You can't add nodes to #{self}!"
+      end
+      
+    end
+    
     class DeadClusterException < RuntimeError
     end
 
@@ -74,8 +95,8 @@ module Herdis
       urls = create_urls(cluster)
       validate(urls)
       @shepherds = cluster
-      @dredis = Redis::Distributed.new(urls,
-                                       @options)
+      @dredis = ReDistributed.new(urls,
+                                  @options)
     end      
     
     def method_missing(meth, *args, &block)

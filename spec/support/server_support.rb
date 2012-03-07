@@ -99,18 +99,24 @@ module Support
     def stable_cluster?(http_port, *shepherd_ids)
       ok = true
       data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{http_port}/cluster").get.response)
-      Herdis::Common::SHARDS.times do |n|
-        correct_shepherd_id = shepherd_ids[n % shepherd_ids.size]
-        data.each do |shepherd_id, shepherd_stat|
-          if shepherd_id == correct_shepherd_id
-            ok &= data[shepherd_id]["masters"].include?(n.to_s)
-          else
-            ok &= !data[shepherd_id]["masters"].include?(n.to_s)
+      if data.nil?
+        ok = false
+      else
+        Herdis::Common::SHARDS.times do |n|
+          correct_shepherd_id = shepherd_ids[n % shepherd_ids.size]
+          data.each do |shepherd_id, shepherd_stat|
+            if shepherd_id == correct_shepherd_id
+              ok &= data[shepherd_id]["masters"].include?(n.to_s)
+            else
+              ok &= !data[shepherd_id]["masters"].include?(n.to_s)
+            end
           end
         end
       end
-      data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{http_port}/sanity").get.response)
-      ok &= data["consistent"]
+      if ok
+        data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{http_port}/sanity").get.response)
+        ok &= data["consistent"]
+      end
       ok
     end
 
