@@ -40,9 +40,13 @@ module Herdis
 
     attr_reader :options, :shepherds, :dredis
 
-    def initialize(url, options = {})
+    def initialize(*args)
+      options = args.last.is_a?(Hash) ? args.pop : {}
       @options = options
-      @shepherds = {"initial" => {"url" => url}}
+      @shepherds = {}
+      args.each_with_index do |url, index|
+        @shepherds["initial#{index}"] = {"url" => url}
+      end
       begin
         refresh_cluster
       rescue DeadClusterException => e
@@ -90,10 +94,20 @@ module Herdis
           @shepherds.delete(random_shepherd_id)
         else
           cluster = Yajl::Parser.parse(cluster_request.response)
+          begin
+            urls = create_urls(cluster)
+            validate(urls)
+          rescue Errno::ECONNREFUSED => e
+            cluster = nil
+          rescue RuntimeError => e
+            if e.message == "ERR operation not permitted"
+              cluster = nil
+            else
+              raise e
+            end
+          end
         end
       end
-      urls = create_urls(cluster)
-      validate(urls)
       @shepherds = cluster
       @dredis = ReDistributed.new(urls,
                                   @options)
