@@ -37,7 +37,7 @@ parameters such as `-p` for port selection, `-s` for logging to STDOUT, `-v` for
 
 The server also uses a set of ENV variables to control its configuration: 
 
-* `SHEPHERD_FIRST_PORT` for the first port to run Redis instances on. Defaults to 9080.
+* `SHEPHERD_FIRST_PORT` for the first port to run Redis instances on. Defaults to `9080`.
 * `SHEPHERD_DIR` for the directory to put Redis dumps and pidfiles in. Defaults to `$HOME/.herdis`.
 * `SHEPHERD_ID` for the id of the server to start. Defaults to a random string.
 * `SHEPHERD_INMEMORY` to run a server managing only non-persistent Redis instances. Defaults to `false`
