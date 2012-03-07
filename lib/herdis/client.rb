@@ -41,8 +41,7 @@ module Herdis
     attr_reader :options, :shepherds, :dredis
 
     def initialize(*args)
-      options = args.last.is_a?(Hash) ? args.pop : {}
-      @options = options
+      @options = args.last.is_a?(Hash) ? args.pop : {}
       @shepherds = {}
       args.each_with_index do |url, index|
         @shepherds["initial#{index}"] = {"url" => url}
