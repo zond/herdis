@@ -1,9 +1,12 @@
 
+require 'em-synchrony'
+require 'em-synchrony/em-http'
 require 'hiredis'
 require 'redis'
 require 'redis/distributed'
 require 'yajl'
 require 'digest/sha1'
+require 'set'
 require 'pp'
 
 $LOAD_PATH.unshift(File.expand_path('lib'))

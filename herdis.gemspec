@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name      =   "herdis"
-  s.version   =   "0.0.1"
+  s.version   =   "0.0.2"
   s.summary   =   "A Redis herder for simplifying Redis presharding"
   s.description = <<EOF
 A Redis herder for simplifying Redis presharding
