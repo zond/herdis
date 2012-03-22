@@ -1,7 +1,7 @@
 PATH
   remote: .
   specs:
-    herdis (0.0.2)
+    herdis (0.0.3)
       em-http-request
       em-synchrony
       goliath
