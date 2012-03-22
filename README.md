@@ -58,7 +58,7 @@ To use it you `require 'herdis/client'` and then instantiate a `Herdis::Client` 
     client.set("test", "value")
     raise "this should work, for example" unless client.get("test") == "value"
 
-If you have a cluster of herdis nodes, you can give all their addresses to the new `Herdis::Client` when you start it, that way it will keep trying until it finds one that works (if you want to be able to restart your clients even if the cluster is currently maimed).
+If you have a cluster of herdis nodes, you can give all their addresses to the new `Herdis::Client` when you start it (`Herdis::Client.new(url1, url2, url3... urln)`), that way it will keep trying until it finds one that works (if you want to be able to restart your clients even if the cluster is currently maimed).
 
 ## Test suite
 
