@@ -129,6 +129,7 @@ module Herdis
     attr_reader :redundancy
     attr_reader :port
     attr_reader :logger
+    attr_reader :host
 
     attr_reader :masters
     attr_reader :slaves
@@ -136,6 +137,7 @@ module Herdis
 
     def initialize(options = {})
       @dir = options.delete(:dir) || File.join(ENV["HOME"], ".herdis")
+      @host = options.delete(:host) || "localhost"
       @redis = options.delete(:redis) || "redis-server"
       @port = options.delete(:port) || 9000
       @logger = options.delete(:logger)
@@ -249,11 +251,6 @@ module Herdis
       end
     end
     
-    def host
-      @host = Fiber.current.host if Fiber.current.respond_to?(:host)
-      @host || "localhost"
-    end
-
     def url
       "http://#{host}:#{port}"
     end
