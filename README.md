@@ -48,6 +48,18 @@ To actually start the server, simply
 
     $ bin/herdis
 
+## Using
+
+To use it you `require 'herdis/client'` and then instantiate a `Herdis::Client` which will act just like a `Redis::Distributed`.
+
+    require 'herdis/client'
+
+    client = Herdis::Client.new("http://localhost:9000")
+    client.set("test", "value")
+    raise "this should work, for example" unless client.get("test") == "value"
+
+If you have a cluster of herdis nodes, you can give all their addresses to the new `Herdis::Client` when you start it, that way it will keep trying until it finds one that works (if you want to be able to restart your clients even if the cluster is currently maimed).
+
 ## Test suite
 
     $ rake
