@@ -276,7 +276,8 @@ module Herdis
         "check_slave_timer" => CHECK_SLAVE_TIMER,
         "check_predecessor_timer" => CHECK_PREDECESSOR_TIMER,
         "sanity" => "#{url}/sanity",
-        "cluster" => "#{url}/cluster"
+        "cluster" => "#{url}/cluster",
+        "shards" => "#{url}/shards"
       }
     end
 
@@ -314,9 +315,11 @@ module Herdis
     def shard_status
       rval = []
       cluster_status.each do |shepherd_id, shepherd_status|
+        shepherd_url = URI.parse(shepherd_status["url"])
+        shepherd_host = shepherd_url.host
         shepherd_status["masters"].each do |shard_id|
           if rval[shard_id.to_i].nil?
-            rval[shard_id.to_i] = "redis://#{host}:#{shard_id.to_i + shepherd_status["first_port"].to_i}/"
+            rval[shard_id.to_i] = "redis://#{shepherd_host}:#{shard_id.to_i + shepherd_status["first_port"].to_i}/"
           else
             raise Goliath::Validation::InternalServerError.new("Duplicate masters: #{shard_id}")
           end
