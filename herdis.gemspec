@@ -1,6 +1,6 @@
 Gem::Specification.new do |s|
   s.name      =   "herdis"
-  s.version   =   "0.0.2"
+  s.version   =   "0.0.3"
   s.summary   =   "A Redis herder for simplifying Redis presharding"
   s.description = <<EOF
 A Redis herder for simplifying Redis presharding
@@ -11,7 +11,7 @@ EOF
 
   s.require_path  = "lib"
 
-  s.files     =   Dir.glob('lib/**/*.rb')
+  s.files     =   Dir.glob('lib/**/*.rb') + ['README.md'] + ['assets/shepherd.png']
   s.executables = ['herdis']
 
   s.has_rdoc  =   true
