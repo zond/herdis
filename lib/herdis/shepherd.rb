@@ -250,7 +250,7 @@ module Herdis
     end
     
     def host
-      @host ||= Fiber.current.host if Fiber.current.respond_to?(:host)
+      @host = Fiber.current.host if Fiber.current.respond_to?(:host)
       @host || "localhost"
     end
 
