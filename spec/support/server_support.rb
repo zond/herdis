@@ -24,6 +24,20 @@ module Support
         EM.stop
       end
     end
+
+    def stop_cluster(port, *to_test)
+      EM.synchrony do
+        EM::HttpRequest.new("http://localhost:#{port}/cluster").delete rescue nil
+        assert_true_within(10) do
+          shutdown = true
+          to_test.each do |p|
+            shutdown &= EM::HttpRequest.new("http://localhost:#{port}/").head.response_header.status != 204
+          end
+          shutdown
+        end
+        EM.stop
+      end
+    end
     
     def stop_server(port, pidfile, dir)
       EM.synchrony do
@@ -115,7 +129,7 @@ module Support
       end
       if ok
         data = Yajl::Parser.parse(EM::HttpRequest.new("http://localhost:#{http_port}/sanity").get.response)
-        ok &= data["consistent"]
+        ok &= data && data["consistent"]
       end
       ok
     end

@@ -7,7 +7,11 @@ module Herdis
       include Common
 
       def response(env)
-        [Herdis::Plugins::ShepherdConnection.shepherd.status, {}, ""]
+        if Herdis::Plugins::ShepherdConnection.shepherd.nil?
+          [404, {}, ""]
+        else
+          [Herdis::Plugins::ShepherdConnection.shepherd.status, {}, ""]
+        end
       end
       
     end

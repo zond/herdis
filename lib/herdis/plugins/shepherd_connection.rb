@@ -13,6 +13,11 @@ module Herdis
         @@shepherd = nil
       end
       
+      def self.shutdown_cluster
+        @@shepherd.shutdown_cluster unless @@shepherd.nil?
+        @@shepherd = nil
+      end
+      
       def initialize(port, config, status, logger)
         @port = port
         @logger = logger
@@ -23,6 +28,7 @@ module Herdis
         copy_from_env(opts, :first_port, :to_i)
         copy_from_env(opts, :dir)
         copy_from_env(opts, :host)
+        copy_from_env(opts, :restart)
         copy_from_env(opts, :port, :to_i)
         copy_from_env(opts, :shepherd_id)
         copy_from_env(opts, :inmemory)

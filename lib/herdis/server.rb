@@ -22,6 +22,7 @@ require 'herdis/handlers/shards'
 require 'herdis/handlers/join_cluster'
 require 'herdis/handlers/remove_shepherd'
 require 'herdis/handlers/shutdown'
+require 'herdis/handlers/shutdown_cluster'
 require 'herdis/handlers/ping'
 require 'herdis/handlers/info'
 require 'herdis/handlers/sanity'
@@ -43,6 +44,8 @@ module Herdis
     get '/cluster', Herdis::Handlers::Cluster
     get '/sanity', Herdis::Handlers::Sanity
     get '/shards', Herdis::Handlers::Shards
+
+    delete '/cluster', Herdis::Handlers::ShutdownCluster
 
     post '/', Herdis::Handlers::JoinCluster
 

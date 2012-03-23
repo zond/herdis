@@ -260,6 +260,119 @@ describe Herdis::Server do
 
   end
 
+  context 'when the cluster restarts' do
+    before :all do
+      @dir1 = Dir.mktmpdir
+      @pidfile1 = Tempfile.new("pid")
+      @first_port1 = 13000
+      @http_port1 = 14000
+      @shepherd_id1 = "id1"
+      start_server(@http_port1, 
+                   @pidfile1.path, 
+                   :check_slave_timer => 0.5,
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir1, 
+                   :first_port => @first_port1, 
+                   :shepherd_id => @shepherd_id1)
+      wait_for_server(@http_port1)
+      @dir2 = Dir.mktmpdir
+      @pidfile2 = Tempfile.new("pid")
+      @first_port2 = 15000
+      @http_port2 = 16000
+      @shepherd_id2 = "id2"
+      start_server(@http_port2, 
+                   @pidfile2.path, 
+                   :check_slave_timer => 0.5,
+                   :connect_to => "http://localhost:#{@http_port1}",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir2, 
+                   :first_port => @first_port2, 
+                   :shepherd_id => @shepherd_id2)
+      wait_for_server(@http_port2)
+      EM.synchrony do
+        assert_stable_cluster(@http_port1, @shepherd_id1, @shepherd_id2)
+        EM.stop
+      end
+      @dir3 = Dir.mktmpdir
+      @pidfile3 = Tempfile.new("pid")
+      @first_port3 = 17000
+      @http_port3 = 18000
+      @shepherd_id3 = "id3"
+      start_server(@http_port3, 
+                   @pidfile3.path, 
+                   :check_slave_timer => 0.5,
+                   :connect_to => "http://localhost:#{@http_port1}",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir3, 
+                   :first_port => @first_port3, 
+                   :shepherd_id => @shepherd_id3)
+      wait_for_server(@http_port3)
+      EM.synchrony do
+        assert_stable_cluster(@http_port1, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        assert_stable_cluster(@http_port2, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        assert_stable_cluster(@http_port3, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        client = Herdis::Client.new("http://localhost:#{@http_port1}")
+        @secret = rand(1 << 128)
+        1000.times do |n|
+          client.set("key:#{@secret}:#{n}", "value:#{@secret}:#{n}")
+        end
+        EM.stop
+      end
+      stop_cluster(@http_port1, @http_port1, @http_port2, @http_port3)
+      Process.kill("KILL", @pidfile1.read.to_i) rescue nil
+      Process.kill("KILL", @pidfile2.read.to_i) rescue nil
+      Process.kill("KILL", @pidfile3.read.to_i) rescue nil
+      start_server(@http_port1, 
+                   @pidfile1.path, 
+                   :check_slave_timer => 0.5,
+                   :restart => "true",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir1, 
+                   :first_port => @first_port1, 
+                   :shepherd_id => @shepherd_id1)
+      wait_for_server(@http_port1)
+      start_server(@http_port2, 
+                   @pidfile2.path, 
+                   :check_slave_timer => 0.5,
+                   :connect_to => "http://localhost:#{@http_port1}",
+                   :restart => "true",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir2, 
+                   :first_port => @first_port2, 
+                   :shepherd_id => @shepherd_id2)
+      wait_for_server(@http_port2)
+      start_server(@http_port3, 
+                   @pidfile3.path, 
+                   :restart => "true",
+                   :check_slave_timer => 0.5,
+                   :connect_to => "http://localhost:#{@http_port1}",
+                   :shepherd_redundancy => 1, 
+                   :dir => @dir3, 
+                   :first_port => @first_port3, 
+                   :shepherd_id => @shepherd_id3)
+      wait_for_server(@http_port3)
+      EM.synchrony do
+        assert_stable_cluster(@http_port1, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        assert_stable_cluster(@http_port2, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        assert_stable_cluster(@http_port3, @shepherd_id1, @shepherd_id2, @shepherd_id3)
+        EM.stop
+      end
+    end
+    after :all do
+      stop_server(@http_port1, @pidfile1, @dir1)
+      stop_server(@http_port2, @pidfile2, @dir2)
+      stop_server(@http_port3, @pidfile3, @dir3)
+    end
+
+    it 'retains all data the cluster had before the crash' do
+      client = Herdis::Client.new("http://localhost:#{@http_port1}")
+      1000.times do |n|
+        client.get("key:#{@secret}:#{n}").should == "value:#{@secret}:#{n}"
+      end
+    end
+    
+  end
+
   context 'when the cluster crashes' do
     
     before :all do

@@ -116,21 +116,25 @@ module Herdis
     end      
     
     def method_missing(meth, *args, &block)
-      begin
-        @dredis.send(meth, *args, &block)
-      rescue DeadClusterException => e
-        refresh_cluster
-        retry
-      rescue Errno::ECONNREFUSED => e
-        refresh_cluster
-        retry
-      rescue RuntimeError => e
-        if e.message == "ERR operation not permitted"
+      if @dredis
+        begin
+          @dredis.send(meth, *args, &block)
+        rescue DeadClusterException => e
           refresh_cluster
           retry
-        else
-          raise e
+        rescue Errno::ECONNREFUSED => e
+          refresh_cluster
+          retry
+        rescue RuntimeError => e
+          if e.message == "ERR operation not permitted"
+            refresh_cluster
+            retry
+          else
+            raise e
+          end
         end
+      else
+        super.send(meth, *args, &block)
       end
     end
 

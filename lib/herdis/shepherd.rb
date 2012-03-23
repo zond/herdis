@@ -6,6 +6,12 @@ module Herdis
     CHECK_SLAVE_TIMER = (ENV["SHEPHERD_CHECK_SLAVE_TIMER"] || 10).to_f
     CHECK_PREDECESSOR_TIMER = (ENV["SHEPHERD_CHECK_PREDECESSOR_TIMER"] || 1).to_f
 
+    class MockLogger
+      def method_missing(meth, *args)
+        STDERR.puts("#{meth}: #{args.inspect}")
+      end
+    end
+
     class Shard
 
       attr_reader :shepherd
@@ -49,6 +55,7 @@ module Herdis
             connection.config("set", "requirepass", "")
             shepherd.slaves.delete(id.to_s)
             shepherd.masters[id.to_s] = self
+            shepherd.save_config!
           rescue RuntimeError => e
             if e.message == "LOADING Redis is loading the dataset in memory"
               EM::Synchrony.sleep(0.1)
@@ -66,6 +73,7 @@ module Herdis
           initialize_redis
           shepherd.masters.delete(id.to_s)
           shepherd.slaves[id.to_s] = self
+          shepherd.save_config!
         end
       end
       def initialize_redis
@@ -83,21 +91,31 @@ module Herdis
         end
         io = IO.popen("#{shepherd.redis} -", "w")
         write_configuration(io)
-        unless master
-          initialization = Proc.new do |p|
+        initialization = Proc.new do |p|
+          unless master
             begin
-              connection.set("#{self.class.name}.id", id)
-              connection.set("#{self.class.name}.created_at", Time.now.to_i)
-              connection.set("#{self.class.name}.created_by", shepherd.shepherd_id)
+              unless connection.get("#{self.class.name}.id")
+                connection.set("#{self.class.name}.id", id) 
+                connection.set("#{self.class.name}.created_at", Time.now.to_i)
+                connection.set("#{self.class.name}.created_by", shepherd.shepherd_id)
+              end
             rescue Errno::ECONNREFUSED => e
               EM.add_timer(0.1) do
                 p.call(p)
               end
+            rescue RuntimeError => e
+              if e.message == "ERR operation not permitted"
+                EM.add_timer(0.1) do
+                  p.call(p)
+                end
+              else
+                raise e
+              end
             end
           end
-          EM.add_timer(0.1) do
-            initialization.call(initialization)
-          end
+        end
+        EM.add_timer(0.1) do
+          initialization.call(initialization)
         end
       end
       def write_configuration(io)
@@ -130,50 +148,118 @@ module Herdis
     attr_reader :port
     attr_reader :logger
     attr_reader :host
-
+    attr_reader :shutdown
+    
     attr_reader :masters
     attr_reader :slaves
     attr_reader :shepherds
 
     def initialize(options = {})
+      @shutdown = false
       @dir = options.delete(:dir) || File.join(ENV["HOME"], ".herdis")
+      Dir.mkdir(dir) unless Dir.exists?(dir)
       @host = options.delete(:host) || "localhost"
       @redis = options.delete(:redis) || "redis-server"
       @port = options.delete(:port) || 9000
-      @logger = options.delete(:logger)
+      @logger = options.delete(:logger) || MockLogger.new
       @first_port = options.delete(:first_port) || 9080
       @inmemory = options.delete(:inmemory)
       @redundancy = options.delete(:redundancy) || 2
-      @shepherd_id = options.delete(:shepherd_id) || rand(1 << 256).to_s(36)
-      Dir.mkdir(dir) unless Dir.exists?(dir)
-
-      @shepherds = {}
-      @slaves = {}
-      @masters = {}
-
+      
+      restart = options.delete(:restart) || false
+      if restart && File.exists?(config_file)
+        old_config = open(config_file) do |input|
+          Yajl::Parser.parse(input.read)
+        end
+        @shepherd_id = old_config["shepherd_id"]
+        @shepherds = old_config["shepherds"]
+        logger.info("#{shepherd_id} *** restoring old config")
+        logger.info("#{shepherd_id} *** siblings: #{shepherds.keys}")
+        logger.info("#{shepherd_id} *** masters: #{old_config["masters"]}")
+        logger.info("#{shepherd_id} *** slaves: #{old_config["slaves"].keys}")
+        @slaves = {}
+        @masters = {}
+        @ready_check_timer = EM.add_periodic_timer(CHECK_PREDECESSOR_TIMER) do
+          Fiber.new do
+            check_ready(old_config)
+          end.resume
+        end
+      else
+        @shepherd_id = options.delete(:shepherd_id) || rand(1 << 256).to_s(36)
+        @shepherds = {}
+        @slaves = {}
+        @masters = {}
+        
+        if connect_to = options.delete(:connect_to)
+          join_cluster(connect_to)
+        else
+          Herdis::Common::SHARDS.times do |shard_id|
+            create_master_shard(shard_id)
+          end
+          @shepherds[shepherd_id] = shepherd_status
+        end
+      end
+      
       at_exit do
         shutdown
       end
+      
+    end
 
-      if connect_to = options.delete(:connect_to)
-        join_cluster(connect_to)
-      else
-        Herdis::Common::SHARDS.times do |shard_id|
-          create_master_shard(shard_id)
-        end
-        @shepherds[shepherd_id] = shepherd_status
+    def save_config!
+      tmpfile = "#{config_file}.new"
+      open(tmpfile, "w") do |output|
+        output.write(Yajl::Encoder.encode({
+                                            :shepherd_id => shepherd_id,
+                                            :shepherds => shepherds,
+                                            :masters => masters.keys,
+                                            :slaves => slaves.inject({}) do |sum, id_and_slave| 
+                                              sum.merge(id_and_slave.first => id_and_slave.last.master) 
+                                            end
+                                          }, :pretty => true))
       end
+      File.rename(tmpfile, config_file)
+    end
+
+    def config_file
+      File.join(dir, "shepherd.json")
+    end
+
+    def check_ready(old_config)
+      shepherds.each do |shepherd_id, shepherd|
+        if EM::HttpRequest.new(shepherd["url"]).head.response_header.status != 204
+          logger.info("#{self.shepherd_id} *** still waiting for #{shepherd_id}")
+          return
+        end
+      end
+      @ready_check_timer.cancel
+      old_config["slaves"].each do |shard_id, external_uri|
+        create_slave_shard(shard_id.to_s, URI.parse(external_uri))
+      end
+      old_config["masters"].each do |shard_id|
+        create_master_shard(shard_id.to_s)
+      end
+      logger.info("#{shepherd_id} *** running again")
+      logger.info("#{shepherd_id} *** siblings: #{shepherds.keys}")
+      logger.info("#{shepherd_id} *** masters: #{masters.keys}")
+      logger.info("#{shepherd_id} *** slaves: #{slaves.keys}")
+      ensure_slave_check
+      ensure_predecessor_check
     end
 
     def ensure_slave_check
       @check_slave_timer ||= EM.add_periodic_timer(CHECK_SLAVE_TIMER) do
-        check_slaves
+        Fiber.new do
+          check_slaves
+        end.resume
       end
     end
 
     def ensure_predecessor_check
       @check_predecessor_timer ||= EM.add_periodic_timer(CHECK_PREDECESSOR_TIMER) do
-        check_predecessor
+        Fiber.new do
+          check_predecessor
+        end.resume
       end
     end
 
@@ -187,7 +273,7 @@ module Herdis
                                                               default_options.rmerge(options)))
         end
       end
-      yield
+      yield if block_given?
       Fiber.new do
         multi.perform while !multi.finished?
       end.resume
@@ -195,6 +281,8 @@ module Herdis
 
     def join_cluster(url)
       shutdown
+      @shutdown = false
+      logger.info("#{shepherd_id} *** joining #{url}")
       @shepherds = Yajl::Parser.parse(EM::HttpRequest.new(url).get(:path => "/cluster",
                                                                    :head => {"Content-Type" => "application/json"}).response)
       add_shepherd(shepherd_status)
@@ -203,6 +291,7 @@ module Herdis
     def add_shepherd(shepherd_status)
       unless shepherd_status == shepherds[shepherd_status["id"]]
         shepherds[shepherd_status["id"]] = shepherd_status
+        save_config!
         to_each_sibling(:aput,
                         :path => "/#{shepherd_status["id"]}",
                         :body => Yajl::Encoder.encode(shepherd_status)) do
@@ -214,6 +303,7 @@ module Herdis
     def remove_shepherd(shepherd_id)
       if shepherds.include?(shepherd_id)
         shepherds.delete(shepherd_id)
+        save_config!
         to_each_sibling(:adelete,
                         :path => "/#{shepherd_id}") do
           check_shards
@@ -346,12 +436,26 @@ module Herdis
       end
     end
 
+    def shutdown_cluster
+      shutdown
+      logger.info("#{shepherd_id} *** shutting down cluster")
+      to_each_sibling(:adelete,
+                      :path => "/cluster")
+    end
+
     def shutdown
-      masters.keys.each do |shard_id|
-        shutdown_shard(shard_id)
-      end
-      slaves.keys.each do |shard_id|
-        shutdown_slave(shard_id)
+      unless @shutdown
+        logger.info("#{shepherd_id} *** shutting down")
+        @shutdown = true
+        save_config!
+        @check_slave_timer.cancel if @check_slave_timer
+        @check_predecessor_timer.cancel if @check_predecessor_timer
+        masters.keys.each do |shard_id|
+          shutdown_shard(shard_id)
+        end
+        slaves.keys.each do |shard_id|
+          shutdown_slave(shard_id)
+        end
       end
     end
 
@@ -408,19 +512,25 @@ module Herdis
         slaves[shard_id.to_s].enslave!(external_shards[shard_id.to_s])
       end
 
-      logger.debug "#{shepherd_id} *** killing masters #{masters_needing_to_be_shut_down.inspect}" unless masters_needing_to_be_shut_down.empty?
-      masters_needing_to_be_shut_down.each do |shard_id|
-        raise "Already liberated, enslaved or directed #{shard_id}!" if handled.include?(shard_id.to_s)
-        handled.add(shard_id.to_s)
-        shutdown_shard(shard_id)
-      end
-      remove_shards(shepherd_id, masters_needing_to_be_shut_down, false)
-      
-      logger.debug "#{shepherd_id} *** killing slaves #{slaves_needing_to_be_shut_down.inspect}" unless slaves_needing_to_be_shut_down.empty?
-      slaves_needing_to_be_shut_down.each do |shard_id|
-        raise "Already liberated, enslaved, directed or shut down #{shard_id}!" if handled.include?(shard_id.to_s)
-        handled.add(shard_id.to_s)
-        shutdown_slave(shard_id)
+      unless masters_needing_to_be_shut_down.empty?
+        logger.debug "#{shepherd_id} *** killing masters #{masters_needing_to_be_shut_down.inspect}" 
+        masters_needing_to_be_shut_down.each do |shard_id|
+          raise "Already liberated, enslaved or directed #{shard_id}!" if handled.include?(shard_id.to_s)
+          handled.add(shard_id.to_s)
+          shutdown_shard(shard_id)
+        end
+        save_config!
+        remove_shards(shepherd_id, masters_needing_to_be_shut_down, false)
+      end      
+
+      unless slaves_needing_to_be_shut_down.empty?
+        logger.debug "#{shepherd_id} *** killing slaves #{slaves_needing_to_be_shut_down.inspect}" 
+        slaves_needing_to_be_shut_down.each do |shard_id|
+          raise "Already liberated, enslaved, directed or shut down #{shard_id}!" if handled.include?(shard_id.to_s)
+          handled.add(shard_id.to_s)
+          shutdown_slave(shard_id)
+        end
+        save_config!
       end
 
       logger.debug "#{shepherd_id} *** creating slaves #{new_slaves_needed.inspect}" unless new_slaves_needed.empty?
@@ -450,6 +560,7 @@ module Herdis
 
     def create_master_shard(shard_id)
       masters[shard_id.to_s] = create_shard(shard_id)
+      save_config!
     end
 
     def status
@@ -509,7 +620,7 @@ module Herdis
       pre = predecessor
       if pre && pre["id"] != shepherd_id
         Fiber.new do
-          if EM::HttpRequest.new(pre["url"]).head.response_header.status != 204
+          if EM::HttpRequest.new(pre["url"]).head(:connect_timeout => 10, :inactivity_timeout => 20).response_header.status != 204
             logger.warn("#{shepherd_id} *** dropping #{pre["id"]} due to failure to respond to ping")
             remove_shepherd(pre["id"])
           end
@@ -519,6 +630,7 @@ module Herdis
 
     def create_slave_shard(shard_id, external_uri)
       slaves[shard_id.to_s] = create_shard(shard_id, :master => external_uri)
+      save_config!
     end
 
     def create_shard(shard_id, options = {})
