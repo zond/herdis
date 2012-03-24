@@ -547,9 +547,13 @@ module Herdis
     def check_slaves
       revolution = Set.new
       (owned_shards & slaves.keys).each do |shard_id|
-        shard = slaves[shard_id.to_s]
-        if shard.connection.info["master_sync_in_progress"] == "0"
-          revolution << shard_id.to_s
+        begin
+          shard = slaves[shard_id.to_s]
+          if shard.connection.info["master_sync_in_progress"] == "0"
+            revolution << shard_id.to_s
+          end
+        rescue RuntimeError => e
+          raise e if e.message != "LOADING Redis is loading the dataset in memory"
         end
       end
       unless revolution.empty?
